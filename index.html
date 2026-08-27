@@ -321,6 +321,16 @@
             <option value="stereo-pan">Stereo Pan (Left ⟷ Right)</option>
           </select>
         </div>
+
+        <div class="control-group">
+          <span class="control-label">Haptic Low-Pass Cutoff: <span id="haptic-cutoff-val">150</span> Hz</span>
+          <input type="range" id="haptic-cutoff-slider" min="40" max="600" step="10" value="150">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Haptic Gain / Boost: <span id="haptic-gain-val">1.5</span>x</span>
+          <input type="range" id="haptic-gain-slider" min="0.5" max="32.0" step="0.1" value="1.5">
+        </div>
       </div>
     </div>
 
@@ -364,6 +374,11 @@
         <div class="control-group">
           <span class="control-label">Hardware Master Volume: <span id="volume-val">100</span>/127</span>
           <input type="range" id="volume-slider" min="0" max="127" value="100">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Load Custom MP3</span>
+          <input type="file" id="mp3-file-input" accept="audio/mp3, audio/mpeg" />
         </div>
       </div>
 
@@ -419,7 +434,7 @@
   </div>
 
   <script type="module">
-    import { createEncoder } from 'https://cdn.jsdelivr.net/npm/libopus-wasm/+esm';
+    import { createEncoder } from "./libopus/index.js";
 
     // --- Sony DualSense CRC32 Implementation ---
     const CRC32_TABLE = new Uint32Array(256);
@@ -465,7 +480,7 @@
     }
 
     // --- AudioWorklet Processor Source ---
-    const audioWorkletCode = `
+const audioWorkletCode = `
       class DualSenseAudioProcessor extends AudioWorkletProcessor {
         constructor(options) {
           super();
@@ -478,6 +493,9 @@
           this.amplitude = 0.08;
           this.phase = 0;
           this.active = true;
+          
+          this.customPcm = null;
+          this.customIndex = 0;
 
           this.port.onmessage = (e) => {
             if (e.data.action === 'updateParams') {
@@ -488,6 +506,9 @@
                 this.targetFrames = (this.mode === '20.0') ? 960 : 1024;
                 this.samplesAccumulated = 0;
               }
+            } else if (e.data.action === 'setCustomAudio') {
+              this.customPcm = e.data.pcm; // Interleaved Float32Array
+              this.customIndex = 0;
             } else if (e.data.action === 'stop') {
               this.active = false;
             }
@@ -500,12 +521,21 @@
           const phaseIncrement = (2.0 * Math.PI * this.frequency) / 48000;
 
           for (let i = 0; i < 128; i++) {
-            const sample = Math.sin(this.phase) * this.amplitude;
-            this.phase += phaseIncrement;
-            if (this.phase >= 2.0 * Math.PI) this.phase -= 2.0 * Math.PI;
+            let sampleL = 0;
+            let sampleR = 0;
 
-            this.bufferL[this.samplesAccumulated] = sample;
-            this.bufferR[this.samplesAccumulated] = sample;
+            if (this.customPcm && this.customIndex < this.customPcm.length) {
+              sampleL = this.customPcm[this.customIndex] * 0.1;       // Left
+              sampleR = this.customPcm[this.customIndex + 1] * 0.1;   // Right
+              this.customIndex += 2;
+              // Loop back to start if end of track reached
+              if (this.customIndex >= this.customPcm.length) {
+                this.customIndex = 0;
+              }
+            }
+
+            this.bufferL[this.samplesAccumulated] = sampleL;
+            this.bufferR[this.samplesAccumulated] = sampleR;
             this.samplesAccumulated++;
 
             if (this.samplesAccumulated === this.targetFrames) {
@@ -592,6 +622,10 @@
     let intervalHistory = [];
     let hidWriteTimes = [];
     let fallbackPhase = 0;
+    
+    let customAudioBuffer = null;
+    let customAudioIndex = 0;
+    let isCustomAudioLoaded = false;
 
     const HEARTBEAT_COLORS = [
       { name: "Vivid Red", hex: "#FF0000", r: 255, g: 0, b: 0 },
@@ -639,6 +673,77 @@
     const crcDisplay = document.getElementById("crc-display");
     const consoleLog = document.getElementById("console-log");
     const clearLogBtn = document.getElementById("clear-log-btn");
+    const mp3FileInput = document.getElementById("mp3-file-input");
+    const hapticCutoffSlider = document.getElementById("haptic-cutoff-slider");
+    const hapticCutoffVal = document.getElementById("haptic-cutoff-val");
+    const hapticGainSlider = document.getElementById("haptic-gain-slider");
+    const hapticGainVal = document.getElementById("haptic-gain-val");
+
+    hapticCutoffSlider.addEventListener("input", (e) => {
+      hapticCutoffVal.textContent = e.target.value;
+      if (window.activeHapticFilter) {
+        window.activeHapticFilter.frequency.setValueAtTime(parseFloat(e.target.value), audioContext.currentTime);
+      }
+    });
+
+    hapticGainSlider.addEventListener("input", (e) => {
+      hapticGainVal.textContent = e.target.value;
+    });
+
+    mp3FileInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      log(`[Audio] Loading MP3 file: ${file.name}...`);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // Ensure an AudioContext exists for decoding
+        if (!audioContext || audioContext.state === 'closed') {
+          audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+        }
+        
+        const decodedAudio = await audioContext.decodeAudioData(arrayBuffer);
+        
+        // OfflineAudioContext to force resampling to exactly 48kHz stereo
+        const offlineCtx = new OfflineAudioContext(
+          CHANNELS, 
+          Math.ceil(decodedAudio.duration * SAMPLE_RATE), 
+          SAMPLE_RATE
+        );
+        
+        const source = offlineCtx.createBufferSource();
+        source.buffer = decodedAudio;
+        source.connect(offlineCtx.destination);
+        source.start(0);
+        
+        customAudioBuffer = await offlineCtx.startRendering();
+        // Extract interleaved channel data from the rendered AudioBuffer
+        const chanL = customAudioBuffer.getChannelData(0);
+        const chanR = customAudioBuffer.numberOfChannels > 1 ? customAudioBuffer.getChannelData(1) : chanL;
+        const interleavedCustom = new Float32Array(chanL.length * 2);
+        for (let i = 0; i < chanL.length; i++) {
+          interleavedCustom[i * 2] = chanL[i];
+          interleavedCustom[i * 2 + 1] = chanR[i];
+        }
+
+        if (workletNode) {
+          window.customPcm = interleavedCustom;
+          window.hapticIndex = 0;
+          workletNode.port.postMessage({
+            action: 'setCustomAudio',
+            pcm: interleavedCustom
+          }, [interleavedCustom.buffer]);
+        }
+
+        customAudioIndex = 0;
+        isCustomAudioLoaded = true;
+        
+        log(`[Audio] MP3 decoded & resampled successfully! Duration: ${decodedAudio.duration.toFixed(2)}s`);
+      } catch (err) {
+        log(`[Audio Error] Failed to decode MP3: ${err.message}`);
+      }
+    });
 
     function log(msg) {
       const timestamp = new Date().toLocaleTimeString() + "." + String(new Date().getMilliseconds()).padStart(3, '0');
@@ -735,9 +840,9 @@
       await hidDevice.sendReport(report[0], report.subarray(1));
     }
 
-    // --- Fill 128-Byte HD Haptics Waveform Blocks (Report 0x39 Offsets 10-139) ---
-    function fillHapticBlocks(report) {
-      if (!isHapticsEnabled) {
+// --- Fill 128-Byte HD Haptics Waveform Blocks from Active PCM Chunk ---
+    function fillHapticBlocks(report, pcmFrame) {
+      if (!isHapticsEnabled || !pcmFrame) {
         // Silent neutral haptic blocks
         report[10] = 0xD2;
         report[11] = 64;
@@ -748,59 +853,41 @@
         return;
       }
 
-      const freq = parseFloat(hapticFreqSlider.value);
       const intensityPct = parseFloat(hapticAmpSlider.value) / 100.0;
-      const pattern = hapticPatternSelect.value;
-      const ampMax = Math.round(127 * intensityPct);
+      const hapticGain = parseFloat(hapticGainSlider.value);
+      const ampMax = Math.round(127 * intensityPct * hapticGain);
 
-      // The haptic blocks carry low-frequency PCM samples (approx 1500Hz clock)
-      const phaseInc = (2.0 * Math.PI * freq) / 1500;
-      hapticBeatCounter++;
-
-      // Block 1 (64 bytes: header 0xD2 64 + 62 sample bytes)
+      // Block 1 (64 bytes: header 0xD2 64 + 62 sample bytes -> 31 pairs)
       report[10] = 0xD2;
       report[11] = 64;
 
       for (let i = 0; i < 31; i++) {
-        hapticPhase += phaseInc;
-        if (hapticPhase >= 2.0 * Math.PI) hapticPhase -= 2.0 * Math.PI;
+        // Grab directly from the active audio frame (interleaved left/right)
+        // We use modulo wrapping just in case the frame length varies
+        let sampleIdx = (i * 2) % pcmFrame.length;
+        const scale = 1.0;
+        let leftSample = Math.min(1.0, pcmFrame[sampleIdx] * scale);
+        let rightSample = Math.min(1.0, pcmFrame[sampleIdx + 1] * scale);
 
-        let sample = Math.sin(hapticPhase);
-        if (pattern === 'square') {
-          sample = sample >= 0 ? 1 : -1;
-        } else if (pattern === 'pulse') {
-          // Beat pulse every 20 reports (~400ms)
-          sample = (hapticBeatCounter % 20 < 6) ? Math.sin(hapticPhase) : 0;
-        }
+        let leftVal = Math.round(leftSample * ampMax);
+        let rightVal = Math.round(rightSample * ampMax);
 
-        let leftVal = Math.round(sample * ampMax);
-        let rightVal = Math.round(sample * ampMax);
-
-        if (pattern === 'stereo-pan') {
-          const pan = Math.sin(hapticBeatCounter * 0.1);
-          leftVal = Math.round(leftVal * Math.max(0, -pan));
-          rightVal = Math.round(rightVal * Math.max(0, pan));
-        }
-
-        // Write signed 8-bit samples (0 is neutral, -128..127)
         report[12 + i * 2] = leftVal & 0xFF;
         report[12 + i * 2 + 1] = rightVal & 0xFF;
       }
 
-      // Block 2 (64 bytes: header 0xD2 64 + 62 sample bytes)
+      // Block 2 (64 bytes: header 0xD2 64 + 62 sample bytes -> 31 pairs)
       report[74] = 0xD2;
       report[75] = 64;
 
       for (let i = 0; i < 31; i++) {
-        hapticPhase += phaseInc;
-        if (hapticPhase >= 2.0 * Math.PI) hapticPhase -= 2.0 * Math.PI;
+        // Continue offset into the frame for Block 2 (pairs 31 to 61)
+        let sampleIdx = ((i + 31) * 2) % pcmFrame.length;
+        let leftSample = pcmFrame[sampleIdx];
+        let rightSample = pcmFrame[sampleIdx + 1];
 
-        let sample = Math.sin(hapticPhase);
-        if (pattern === 'square') sample = sample >= 0 ? 1 : -1;
-        if (pattern === 'pulse') sample = (hapticBeatCounter % 20 < 6) ? Math.sin(hapticPhase) : 0;
-
-        let leftVal = Math.round(sample * ampMax);
-        let rightVal = Math.round(sample * ampMax);
+        let leftVal = Math.round(leftSample * ampMax);
+        let rightVal = Math.round(rightSample * ampMax);
 
         report[76 + i * 2] = leftVal & 0xFF;
         report[76 + i * 2 + 1] = rightVal & 0xFF;
@@ -808,7 +895,7 @@
     }
 
     // Build 0x39 Full Audio + HD Haptics Report
-    function buildAudioReport(encodedA, encodedB, target = 'speaker', bufferLength = 64) {
+    function buildAudioReport(encodedA, encodedB, pcmFrame, target = 'speaker', bufferLength = 64) {
       const report = fullReportBuffer;
       report.fill(0);
 
@@ -816,7 +903,7 @@
       report[1] = getNextSequenceByte();
       report[2] = 0x91;
       report[3] = 0x06;
-      report[4] = 0x7E; // Flags: Enables Audio + Haptics pipelines
+      report[4] = 0x7E; 
 
       const bufByte = bufferLength & 0xFF;
       report[5] = bufByte;
@@ -827,8 +914,8 @@
       packetCounter = (packetCounter + 2) & 0xFF;
       report[9] = packetCounter;
 
-      // Fill HD Haptic Waveforms into offsets 10-137
-      fillHapticBlocks(report);
+      // Pass the active audio frame so haptics match the speaker output exactly
+      fillHapticBlocks(report, pcmFrame);
 
       const audioPacketType = (target === 'headset') ? 0x16 : 0x13;
       report[140] = audioPacketType | 0xC0;
@@ -863,7 +950,7 @@
         const encA = encoder.encodeFloat(frameA);
         const encB = encoder.encodeFloat(frameB);
 
-        const report = buildAudioReport(encA, encB, currentTarget, 64);
+        const report = buildAudioReport(encA, encB, pcmForOpus, currentTarget, 64);
         await hidDevice.sendReport(report[0], report.subarray(1));
 
         audioReportsSent++;
@@ -979,6 +1066,18 @@
           workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {
             processorOptions: { mode: workletMode }
           });
+
+          // Create a low-pass filter node for the haptics channel path
+          const hapticFilter = audioContext.createBiquadFilter();
+          hapticFilter.type = 'lowpass';
+          hapticFilter.frequency.value = parseFloat(hapticCutoffSlider.value);
+
+          // Connect: Worklet -> Haptic Filter -> Destination (or analyser)
+          workletNode.connect(hapticFilter);
+          hapticFilter.connect(audioContext.destination);
+
+          // Save filter reference globally so sliders can update it live
+          window.activeHapticFilter = hapticFilter;
 
           workletNode.port.onmessage = (e) => {
             if (e.data.type === 'audio-chunk' && isAudioStreaming) {
