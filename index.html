@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DualSense WebHID - Protocol, Audio & HD Haptics Lab</title>
+  <style>
+    :root {
+      --bg-color: #0f111a;
+      --card-bg: #1a1d2e;
+      --card-border: #282c45;
+      --text-main: #f0f2f5;
+      --text-sub: #9499b3;
+      --accent: #5b73e8;
+      --accent-hover: #4861d8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --haptic: #ec4899;
+      --haptic-hover: #db2777;
+      --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      padding: 30px 20px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      color: #ffffff;
+      margin-bottom: 8px;
+    }
+
+    p.subtitle {
+      color: var(--text-sub);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      align-items: center;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--accent-hover);
+    }
+
+    .btn-danger {
+      background-color: var(--danger);
+      color: #fff;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background-color: #dc2626;
+    }
+
+    .btn-success {
+      background-color: var(--success);
+      color: #fff;
+    }
+    .btn-success:hover:not(:disabled) {
+      background-color: #059669;
+    }
+
+    .btn-secondary {
+      background-color: #2d334d;
+      color: var(--text-main);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background-color: #383f60;
+    }
+
+    .btn-haptic {
+      background-color: var(--haptic);
+      color: #fff;
+    }
+    .btn-haptic:hover:not(:disabled) {
+      background-color: var(--haptic-hover);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      background-color: #222638;
+      border: 1px solid var(--card-border);
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: var(--danger);
+    }
+
+    .status-badge.connected .status-dot {
+      background-color: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-top: 15px;
+    }
+
+    .metric-box {
+      background-color: #121422;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #fff;
+      font-family: var(--font-mono);
+    }
+
+    .color-preview-box {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      border: 2px solid #fff;
+      box-shadow: 0 0 12px rgba(255,255,255,0.2);
+      transition: background-color 0.3s ease;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 140px;
+    }
+
+    .control-label {
+      font-size: 0.8rem;
+      color: var(--text-sub);
+      font-weight: 500;
+    }
+
+    input[type="color"] {
+      -webkit-appearance: none;
+      border: none;
+      width: 48px;
+      height: 38px;
+      border-radius: 6px;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    input[type="range"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    select, input[type="number"] {
+      background-color: #121422;
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    #console-log {
+      width: 100%;
+      height: 220px;
+      background-color: #0b0d14;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: #38ef7d;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      padding: 12px;
+      resize: vertical;
+      overflow-y: auto;
+      white-space: pre;
+      line-height: 1.4;
+    }
+
+    .pulse {
+      animation: pulse 1s infinite alternate;
+    }
+
+    @keyframes pulse {
+      from { box-shadow: 0 0 4px var(--accent); }
+      to { box-shadow: 0 0 16px var(--accent); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>DualSense WebHID Lab</h1>
+      <p class="subtitle">Hardware-Clocked Audio & Audio-Driven HD Waveform Haptics over Bluetooth</p>
+    </header>
+
+    <!-- Connection Section -->
+    <div class="card">
+      <div class="card-title">
+        <span>Controller Connection</span>
+        <div id="connection-status" class="status-badge">
+          <div class="status-dot"></div>
+          <span id="status-text">Disconnected</span>
+        </div>
+      </div>
+      <div class="row">
+        <button id="connect-btn" class="btn btn-primary">Connect DualSense</button>
+        <button id="disconnect-btn" class="btn btn-danger" disabled>Disconnect</button>
+        <span id="encoder-status" style="font-size: 0.85rem; color: var(--text-sub);">Loading libopus-wasm...</span>
+      </div>
+    </div>
+
+    <!-- Audio-Driven HD Waveform Haptics Section -->
+    <div class="card" style="border-color: var(--haptic);">
+      <div class="card-title">
+        <span>📳 Audio-Driven HD Haptics (Report 0x39 Offsets 10-139 Waveforms)</span>
+        <span style="font-size: 0.85rem; color: var(--text-sub);">Streams real-time low-frequency PCM waveforms to LRA voice-coils</span>
+      </div>
+
+      <div class="row" style="margin-bottom: 15px;">
+        <button id="toggle-haptic-btn" class="btn btn-haptic">Enable HD Haptics Waveform</button>
+
+        <div class="control-group">
+          <span class="control-label">Haptic Frequency: <span id="haptic-freq-val">120</span> Hz</span>
+          <input type="range" id="haptic-freq-slider" min="40" max="350" step="5" value="120">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Haptic Intensity: <span id="haptic-amp-val">100</span>%</span>
+          <input type="range" id="haptic-amp-slider" min="0" max="100" step="5" value="100">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Waveform Pattern</span>
+          <select id="haptic-pattern-select">
+            <option value="sine" selected>Sine Wave (Smooth LRA Resonance)</option>
+            <option value="pulse">Pulse / Kick Beat (10 Hz Burst)</option>
+            <option value="square">Square Wave (Crisp Texture)</option>
+            <option value="stereo-pan">Stereo Pan (Left ⟷ Right)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio Streaming Section -->
+    <div class="card" style="border-color: var(--accent);">
+      <div class="card-title">
+        <span>🎵 Acoustic Audio Stream (Report 0x39 Full Audio)</span>
+        <span style="font-size: 0.85rem; color: var(--text-sub);">C# Sync: 8 Audio Blocks (1024 frames @ 48kHz = exactly 21.333ms)</span>
+      </div>
+
+      <div class="row" style="margin-bottom: 15px;">
+        <button id="toggle-audio-btn" class="btn btn-success" disabled>▶ Start Tone & Haptics Stream</button>
+
+        <div class="control-group">
+          <span class="control-label">Target Output</span>
+          <select id="audio-target-select">
+            <option value="speaker" selected>Controller Speaker</option>
+            <option value="headset">3.5mm Headset Jack</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Clock Mode</span>
+          <select id="clock-source-select">
+            <option value="audioworklet-21" selected>Web Audio 21.333ms (8 blocks / 1024 frames resampled)</option>
+            <option value="audioworklet-20">Web Audio 20.000ms (960 frames direct)</option>
+            <option value="worker">Web Worker Timer (21.333ms)</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Speaker Tone Frequency: <span id="freq-val">440</span> Hz</span>
+          <input type="range" id="freq-slider" min="100" max="1500" step="10" value="440">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Speaker Volume: <span id="amp-val">0.08</span></span>
+          <input type="range" id="amp-slider" min="0.00" max="0.30" step="0.01" value="0.08">
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Hardware Master Volume: <span id="volume-val">100</span>/127</span>
+          <input type="range" id="volume-slider" min="0" max="127" value="100">
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <div class="metric-label">Audio Reports (0x39)</div>
+          <div class="metric-value" id="metric-audio-sent">0</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Packet Counter</div>
+          <div class="metric-value" id="metric-pkt-ctr">0</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Average Interval</div>
+          <div class="metric-value" id="metric-interval">0.0 ms</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">HD Haptics State</div>
+          <div class="metric-value" id="metric-haptic-status" style="font-size: 1.1rem; color: var(--haptic);">Inactive</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Errors</div>
+          <div class="metric-value" id="metric-errors" style="color: var(--success);">0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Heartbeat / LED Section -->
+    <div class="card">
+      <div class="card-title">
+        <span>Lightbar Heartbeat (Report 0x32)</span>
+        <span style="font-size: 0.85rem; color: var(--text-sub);">Visual connection validation</span>
+      </div>
+
+      <div class="row">
+        <button id="toggle-heartbeat-btn" class="btn btn-primary" disabled>Start LED Heartbeat</button>
+        <div class="color-preview-box" id="current-color-preview" style="background-color: #000000;" title="Current Target Color"></div>
+        <div style="display: flex; flex-direction: column; justify-content: center;">
+          <span style="font-size: 0.85rem; font-weight: 600;" id="color-name-text">Color: Idle</span>
+          <span style="font-size: 0.75rem; color: var(--text-sub);" id="crc-display">Last CRC: None</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diagnostic Log Console -->
+    <div class="card">
+      <div class="card-title">
+        <span>Diagnostic Log</span>
+        <button id="clear-log-btn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">Clear Log</button>
+      </div>
+      <textarea id="console-log" readonly placeholder="Diagnostic logs will appear here..."></textarea>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createEncoder } from 'https://cdn.jsdelivr.net/npm/libopus-wasm/+esm';
+
+    // --- Sony DualSense CRC32 Implementation ---
+    const CRC32_TABLE = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let bit = 0; bit < 8; bit++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      CRC32_TABLE[i] = c >>> 0;
+    }
+
+    function sonyCrc32(data) {
+      let crc = ~0xEADA2D49 >>> 0; // 0x1525D2B6
+      for (let i = 0; i < data.length; i++) {
+        crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ data[i]) & 0xFF];
+      }
+      return (~crc) >>> 0;
+    }
+
+    function fillSonyCrc(report) {
+      const crc = sonyCrc32(report.subarray(0, report.length - 4));
+      const view = new DataView(report.buffer, report.byteOffset, report.byteLength);
+      view.setUint32(report.length - 4, crc, true); // Little-endian
+      return crc;
+    }
+
+    // --- Resample Stereo Linear (1024 frames -> 960 frames) ---
+    function resampleStereoLinear(input, inputFrames, output, outputFrames) {
+      const step = inputFrames / outputFrames; // 1024 / 960 = 1.06666667
+      for (let outputFrame = 0; outputFrame < outputFrames; outputFrame++) {
+        const sourcePosition = outputFrame * step;
+        const sourceFrame = Math.floor(sourcePosition);
+        const fraction = sourcePosition - sourceFrame;
+        const nextFrame = Math.min(sourceFrame + 1, inputFrames - 1);
+
+        const sourceOffset = sourceFrame * 2;
+        const nextOffset = nextFrame * 2;
+        const outputOffset = outputFrame * 2;
+
+        output[outputOffset] = input[sourceOffset] + (input[nextOffset] - input[sourceOffset]) * fraction;
+        output[outputOffset + 1] = input[sourceOffset + 1] + (input[nextOffset + 1] - input[sourceOffset + 1]) * fraction;
+      }
+    }
+
+    // --- AudioWorklet Processor Source ---
+    const audioWorkletCode = `
+      class DualSenseAudioProcessor extends AudioWorkletProcessor {
+        constructor(options) {
+          super();
+          this.mode = (options && options.processorOptions && options.processorOptions.mode) || '21.333';
+          this.targetFrames = (this.mode === '20.0') ? 960 : 1024;
+          this.samplesAccumulated = 0;
+          this.bufferL = new Float32Array(1024);
+          this.bufferR = new Float32Array(1024);
+          this.frequency = 440;
+          this.amplitude = 0.08;
+          this.phase = 0;
+          this.active = true;
+
+          this.port.onmessage = (e) => {
+            if (e.data.action === 'updateParams') {
+              if (e.data.frequency !== undefined) this.frequency = e.data.frequency;
+              if (e.data.amplitude !== undefined) this.amplitude = e.data.amplitude;
+              if (e.data.mode !== undefined) {
+                this.mode = e.data.mode;
+                this.targetFrames = (this.mode === '20.0') ? 960 : 1024;
+                this.samplesAccumulated = 0;
+              }
+            } else if (e.data.action === 'stop') {
+              this.active = false;
+            }
+          };
+        }
+
+        process(inputs, outputs, parameters) {
+          if (!this.active) return false;
+
+          const phaseIncrement = (2.0 * Math.PI * this.frequency) / 48000;
+
+          for (let i = 0; i < 128; i++) {
+            const sample = Math.sin(this.phase) * this.amplitude;
+            this.phase += phaseIncrement;
+            if (this.phase >= 2.0 * Math.PI) this.phase -= 2.0 * Math.PI;
+
+            this.bufferL[this.samplesAccumulated] = sample;
+            this.bufferR[this.samplesAccumulated] = sample;
+            this.samplesAccumulated++;
+
+            if (this.samplesAccumulated === this.targetFrames) {
+              const numSamples = this.targetFrames;
+              const interleaved = new Float32Array(numSamples * 2);
+              for (let s = 0; s < numSamples; s++) {
+                interleaved[s * 2] = this.bufferL[s];
+                interleaved[s * 2 + 1] = this.bufferR[s];
+              }
+              this.port.postMessage({
+                type: 'audio-chunk',
+                pcm: interleaved,
+                frames: numSamples
+              }, [interleaved.buffer]);
+              this.samplesAccumulated = 0;
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor('dualsense-audio-processor', DualSenseAudioProcessor);
+    `;
+
+    // --- Inline Web Worker for Fallback Timer ---
+    const workerScript = `
+      let timerId = null;
+      let intervalMs = 21.333333;
+      let nextExpected = 0;
+
+      function scheduleTick() {
+        nextExpected += intervalMs;
+        const now = performance.now();
+        const delay = Math.max(0, nextExpected - now);
+        timerId = setTimeout(() => {
+          postMessage('tick');
+          scheduleTick();
+        }, delay);
+      }
+
+      onmessage = (e) => {
+        if (e.data.action === 'start') {
+          intervalMs = e.data.interval || 21.333333;
+          nextExpected = performance.now();
+          scheduleTick();
+        } else if (e.data.action === 'stop') {
+          if (timerId) clearTimeout(timerId);
+          timerId = null;
+        }
+      };
+    `;
+    const timerWorker = new Worker(URL.createObjectURL(new Blob([workerScript], { type: 'application/javascript' })));
+
+    // --- Protocol Constants & State ---
+    const SAMPLE_RATE = 48000;
+    const CHANNELS = 2;
+    const FRAMES_PER_OPUS_PACKET = 480;
+    const SAMPLES_PER_OPUS_PACKET = FRAMES_PER_OPUS_PACKET * CHANNELS;
+    const OPUS_PACKET_BYTES = 200;
+    const FULL_REPORT_LENGTH = 547;
+    const STATE_REPORT_LENGTH = 142;
+
+    let hidDevice = null;
+    let encoder = null;
+    let audioContext = null;
+    let workletNode = null;
+    let isWorkletModuleLoaded = false;
+
+    let sequenceCounter = 0;
+    let packetCounter = 0;
+    let audioReportsSent = 0;
+    let reportErrorsCount = 0;
+
+    let isAudioStreaming = false;
+    let heartbeatTimer = null;
+    let currentColorIndex = 0;
+
+    // HD Haptic Waveform State
+    let isHapticsEnabled = true;
+    let hapticPhase = 0;
+    let hapticBeatCounter = 0;
+
+    // Timing metrics
+    let lastSendTimestamp = 0;
+    let intervalHistory = [];
+    let hidWriteTimes = [];
+    let fallbackPhase = 0;
+
+    const HEARTBEAT_COLORS = [
+      { name: "Vivid Red", hex: "#FF0000", r: 255, g: 0, b: 0 },
+      { name: "Neon Green", hex: "#00FF00", r: 0, g: 255, b: 0 },
+      { name: "Deep Blue", hex: "#0000FF", r: 0, g: 0, b: 255 },
+      { name: "Bright Cyan", hex: "#00FFFF", r: 0, g: 255, b: 255 },
+      { name: "Magenta", hex: "#FF00FF", r: 255, g: 0, b: 255 },
+      { name: "Electric Yellow", hex: "#FFFF00", r: 255, g: 255, b: 0 },
+      { name: "Vibrant Orange", hex: "#FF7700", r: 255, g: 119, b: 0 },
+      { name: "Pure White", hex: "#FFFFFF", r: 255, g: 255, b: 255 }
+    ];
+
+    const fullReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
+    const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
+
+    // --- DOM Elements ---
+    const connectBtn = document.getElementById("connect-btn");
+    const disconnectBtn = document.getElementById("disconnect-btn");
+    const connectionStatus = document.getElementById("connection-status");
+    const statusText = document.getElementById("status-text");
+    const encoderStatus = document.getElementById("encoder-status");
+    const toggleAudioBtn = document.getElementById("toggle-audio-btn");
+    const clockSourceSelect = document.getElementById("clock-source-select");
+    const freqSlider = document.getElementById("freq-slider");
+    const freqVal = document.getElementById("freq-val");
+    const ampSlider = document.getElementById("amp-slider");
+    const ampVal = document.getElementById("amp-val");
+    const volumeSlider = document.getElementById("volume-slider");
+    const volumeVal = document.getElementById("volume-val");
+    const audioTargetSelect = document.getElementById("audio-target-select");
+    const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
+    const hapticFreqSlider = document.getElementById("haptic-freq-slider");
+    const hapticFreqVal = document.getElementById("haptic-freq-val");
+    const hapticAmpSlider = document.getElementById("haptic-amp-slider");
+    const hapticAmpVal = document.getElementById("haptic-amp-val");
+    const hapticPatternSelect = document.getElementById("haptic-pattern-select");
+    const metricAudioSent = document.getElementById("metric-audio-sent");
+    const metricPktCtr = document.getElementById("metric-pkt-ctr");
+    const metricInterval = document.getElementById("metric-interval");
+    const metricHapticStatus = document.getElementById("metric-haptic-status");
+    const metricErrors = document.getElementById("metric-errors");
+    const toggleHeartbeatBtn = document.getElementById("toggle-heartbeat-btn");
+    const colorPreview = document.getElementById("current-color-preview");
+    const colorNameText = document.getElementById("color-name-text");
+    const crcDisplay = document.getElementById("crc-display");
+    const consoleLog = document.getElementById("console-log");
+    const clearLogBtn = document.getElementById("clear-log-btn");
+
+    function log(msg) {
+      const timestamp = new Date().toLocaleTimeString() + "." + String(new Date().getMilliseconds()).padStart(3, '0');
+      consoleLog.value += `[${timestamp}] ${msg}\n`;
+      consoleLog.scrollTop = consoleLog.scrollHeight;
+    }
+
+    async function initOpus() {
+      try {
+        encoder = await createEncoder({
+          sampleRate: SAMPLE_RATE,
+          channels: CHANNELS,
+          application: 2049,
+          bitrate: OPUS_PACKET_BYTES * 8 * 100,
+          vbr: false,
+          frameSize: FRAMES_PER_OPUS_PACKET,
+          complexity: 10
+        });
+        encoderStatus.textContent = "Opus Encoder: Ready (48kHz Stereo 160kbps CBR)";
+        encoderStatus.style.color = "var(--success)";
+        log("Opus encoder initialized successfully.");
+        updateUiState();
+      } catch (err) {
+        encoderStatus.textContent = `Opus Encoder Error: ${err.message}`;
+        encoderStatus.style.color = "var(--danger)";
+        log(`Failed to initialize Opus: ${err.message}`);
+      }
+    }
+
+    function updateUiState() {
+      const isConnected = hidDevice && hidDevice.opened;
+      const isOpusReady = encoder !== null;
+
+      if (isConnected) {
+        connectionStatus.className = "status-badge connected";
+        statusText.textContent = `Connected: ${hidDevice.productName || 'DualSense'}`;
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        toggleHeartbeatBtn.disabled = false;
+        toggleAudioBtn.disabled = !isOpusReady;
+      } else {
+        connectionStatus.className = "status-badge";
+        statusText.textContent = "Disconnected";
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        toggleHeartbeatBtn.disabled = true;
+        toggleAudioBtn.disabled = true;
+        if (isAudioStreaming) stopAudioStream();
+        stopHeartbeat();
+      }
+    }
+
+    function getNextSequenceByte() {
+      const seqByte = (sequenceCounter << 4) & 0xFF;
+      sequenceCounter = (sequenceCounter + 1) & 0x0F;
+      return seqByte;
+    }
+
+    // Build 0x32 State Report
+    function buildStateReport({ r = 0, g = 100, b = 255, volume = 100, target = 'speaker' } = {}) {
+      const report = new Uint8Array(STATE_REPORT_LENGTH);
+      report[0] = 0x32;
+      report[1] = getNextSequenceByte();
+      report[2] = 0x90;
+      report[3] = 0x3F;
+
+      const state = 4;
+      report[state + 0] = 0xB0;
+      report[state + 1] = 0x96;
+
+      report[state + 4] = volume & 0x7F;
+      report[state + 5] = volume & 0x7F;
+      report[state + 6] = 0x40;
+
+      report[state + 7] = (target === 'headset') ? 0x20 : 0x00;
+      report[state + 9] = 0x00;
+      report[state + 37] = 0x03;
+
+      report[state + 38] = 0x02;
+      report[state + 41] = 0x02;
+      report[state + 42] = 0x00;
+      report[state + 43] = 0x04;
+      report[state + 44] = r & 0xFF;
+      report[state + 45] = g & 0xFF;
+      report[state + 46] = b & 0xFF;
+
+      fillSonyCrc(report);
+      return report;
+    }
+
+    async function sendStateReport(options = {}) {
+      if (!hidDevice || !hidDevice.opened) return;
+      const report = buildStateReport(options);
+      await hidDevice.sendReport(report[0], report.subarray(1));
+    }
+
+    // --- Fill 128-Byte HD Haptics Waveform Blocks (Report 0x39 Offsets 10-139) ---
+    function fillHapticBlocks(report) {
+      if (!isHapticsEnabled) {
+        // Silent neutral haptic blocks
+        report[10] = 0xD2;
+        report[11] = 64;
+        report.fill(0, 12, 74);
+        report[74] = 0xD2;
+        report[75] = 64;
+        report.fill(0, 76, 138);
+        return;
+      }
+
+      const freq = parseFloat(hapticFreqSlider.value);
+      const intensityPct = parseFloat(hapticAmpSlider.value) / 100.0;
+      const pattern = hapticPatternSelect.value;
+      const ampMax = Math.round(127 * intensityPct);
+
+      // The haptic blocks carry low-frequency PCM samples (approx 1500Hz clock)
+      const phaseInc = (2.0 * Math.PI * freq) / 1500;
+      hapticBeatCounter++;
+
+      // Block 1 (64 bytes: header 0xD2 64 + 62 sample bytes)
+      report[10] = 0xD2;
+      report[11] = 64;
+
+      for (let i = 0; i < 31; i++) {
+        hapticPhase += phaseInc;
+        if (hapticPhase >= 2.0 * Math.PI) hapticPhase -= 2.0 * Math.PI;
+
+        let sample = Math.sin(hapticPhase);
+        if (pattern === 'square') {
+          sample = sample >= 0 ? 1 : -1;
+        } else if (pattern === 'pulse') {
+          // Beat pulse every 20 reports (~400ms)
+          sample = (hapticBeatCounter % 20 < 6) ? Math.sin(hapticPhase) : 0;
+        }
+
+        let leftVal = Math.round(sample * ampMax);
+        let rightVal = Math.round(sample * ampMax);
+
+        if (pattern === 'stereo-pan') {
+          const pan = Math.sin(hapticBeatCounter * 0.1);
+          leftVal = Math.round(leftVal * Math.max(0, -pan));
+          rightVal = Math.round(rightVal * Math.max(0, pan));
+        }
+
+        // Write signed 8-bit samples (0 is neutral, -128..127)
+        report[12 + i * 2] = leftVal & 0xFF;
+        report[12 + i * 2 + 1] = rightVal & 0xFF;
+      }
+
+      // Block 2 (64 bytes: header 0xD2 64 + 62 sample bytes)
+      report[74] = 0xD2;
+      report[75] = 64;
+
+      for (let i = 0; i < 31; i++) {
+        hapticPhase += phaseInc;
+        if (hapticPhase >= 2.0 * Math.PI) hapticPhase -= 2.0 * Math.PI;
+
+        let sample = Math.sin(hapticPhase);
+        if (pattern === 'square') sample = sample >= 0 ? 1 : -1;
+        if (pattern === 'pulse') sample = (hapticBeatCounter % 20 < 6) ? Math.sin(hapticPhase) : 0;
+
+        let leftVal = Math.round(sample * ampMax);
+        let rightVal = Math.round(sample * ampMax);
+
+        report[76 + i * 2] = leftVal & 0xFF;
+        report[76 + i * 2 + 1] = rightVal & 0xFF;
+      }
+    }
+
+    // Build 0x39 Full Audio + HD Haptics Report
+    function buildAudioReport(encodedA, encodedB, target = 'speaker', bufferLength = 64) {
+      const report = fullReportBuffer;
+      report.fill(0);
+
+      report[0] = 0x39;
+      report[1] = getNextSequenceByte();
+      report[2] = 0x91;
+      report[3] = 0x06;
+      report[4] = 0x7E; // Flags: Enables Audio + Haptics pipelines
+
+      const bufByte = bufferLength & 0xFF;
+      report[5] = bufByte;
+      report[6] = bufByte;
+      report[7] = bufByte;
+      report[8] = bufByte;
+
+      packetCounter = (packetCounter + 2) & 0xFF;
+      report[9] = packetCounter;
+
+      // Fill HD Haptic Waveforms into offsets 10-137
+      fillHapticBlocks(report);
+
+      const audioPacketType = (target === 'headset') ? 0x16 : 0x13;
+      report[140] = audioPacketType | 0xC0;
+      report[141] = OPUS_PACKET_BYTES;
+
+      report.set(encodedA, 142);
+      report.set(encodedB, 342);
+
+      fillSonyCrc(report);
+      return report;
+    }
+
+    async function processAndSendPcm(inputPcm, inputFrames) {
+      if (!isAudioStreaming || !hidDevice || !hidDevice.opened) return;
+
+      const writeStart = performance.now();
+      const currentTarget = audioTargetSelect.value;
+
+      try {
+        let pcmForOpus;
+
+        if (inputFrames === 1024) {
+          resampleStereoLinear(inputPcm, 1024, resampleOutputBuffer, 960);
+          pcmForOpus = resampleOutputBuffer;
+        } else {
+          pcmForOpus = inputPcm;
+        }
+
+        const frameA = pcmForOpus.subarray(0, SAMPLES_PER_OPUS_PACKET);
+        const frameB = pcmForOpus.subarray(SAMPLES_PER_OPUS_PACKET, SAMPLES_PER_OPUS_PACKET * 2);
+
+        const encA = encoder.encodeFloat(frameA);
+        const encB = encoder.encodeFloat(frameB);
+
+        const report = buildAudioReport(encA, encB, currentTarget, 64);
+        await hidDevice.sendReport(report[0], report.subarray(1));
+
+        audioReportsSent++;
+        metricAudioSent.textContent = audioReportsSent;
+        metricPktCtr.textContent = packetCounter;
+
+        const writeEnd = performance.now();
+        const writeDuration = writeEnd - writeStart;
+        hidWriteTimes.push(writeDuration);
+        if (hidWriteTimes.length > 50) hidWriteTimes.shift();
+
+        if (lastSendTimestamp > 0) {
+          const delta = writeStart - lastSendTimestamp;
+          intervalHistory.push(delta);
+          if (intervalHistory.length > 20) intervalHistory.shift();
+
+          const avgInterval = intervalHistory.reduce((a, b) => a + b, 0) / intervalHistory.length;
+          metricInterval.textContent = `${avgInterval.toFixed(1)} ms`;
+        }
+        lastSendTimestamp = writeStart;
+
+        if (audioReportsSent % 100 === 0) {
+          const avgWrite = hidWriteTimes.reduce((a, b) => a + b, 0) / hidWriteTimes.length;
+          const maxWrite = Math.max(...hidWriteTimes);
+          log(`[Audio & Haptics] Reports: ${audioReportsSent} | Interval: ${metricInterval.textContent} | Haptics: ${isHapticsEnabled ? 'Active (' + hapticFreqSlider.value + 'Hz)' : 'Off'}`);
+        }
+      } catch (err) {
+        reportErrorsCount++;
+        metricErrors.textContent = reportErrorsCount;
+        log(`[Audio Error] Send failed: ${err.message}`);
+      }
+    }
+
+    // Worker fallback tick
+    timerWorker.onmessage = (e) => {
+      if (e.data === 'tick' && clockSourceSelect.value === 'worker') {
+        const frequency = parseFloat(freqSlider.value);
+        const amplitude = parseFloat(ampSlider.value);
+        const phaseIncrement = (2.0 * Math.PI * frequency) / SAMPLE_RATE;
+        const pcm1024 = new Float32Array(1024 * 2);
+
+        for (let s = 0; s < 1024; s++) {
+          const val = Math.sin(fallbackPhase) * amplitude;
+          fallbackPhase += phaseIncrement;
+          if (fallbackPhase >= 2.0 * Math.PI) fallbackPhase -= 2.0 * Math.PI;
+
+          pcm1024[s * 2] = val;
+          pcm1024[s * 2 + 1] = val;
+        }
+        processAndSendPcm(pcm1024, 1024);
+      }
+    };
+
+    // --- Audio & Haptic Streaming Controls ---
+    async function startAudioStream() {
+      if (isAudioStreaming || !hidDevice || !encoder) return;
+
+      isAudioStreaming = true;
+      toggleAudioBtn.textContent = "⏹ Stop Tone & Haptics Stream";
+      toggleAudioBtn.className = "btn btn-danger pulse";
+
+      const target = audioTargetSelect.value;
+      const volume = parseInt(volumeSlider.value, 10);
+      const frequency = parseFloat(freqSlider.value);
+      const amplitude = parseFloat(ampSlider.value);
+      const clockMode = clockSourceSelect.value;
+
+      log(`[Audio & Haptics] Initializing stream (Target: ${target}, Vol: ${volume}, Haptics: ${isHapticsEnabled ? 'ON' : 'OFF'})...`);
+
+      for (let i = 0; i < 8; i++) {
+        if (!isAudioStreaming) return;
+        await sendStateReport({ r: 0, g: 255, b: 120, volume, target });
+        await new Promise(r => setTimeout(r, 20));
+      }
+
+      log("[Audio] Sending silent pre-roll to prime controller buffer...");
+      const silenceFrame = new Float32Array(SAMPLES_PER_OPUS_PACKET);
+      const encodedSilenceA = encoder.encodeFloat(silenceFrame);
+      const encodedSilenceB = encoder.encodeFloat(silenceFrame);
+
+      for (let i = 0; i < 8; i++) {
+        if (!isAudioStreaming) break;
+        const report = buildAudioReport(encodedSilenceA, encodedSilenceB, target, 64);
+        await hidDevice.sendReport(report[0], report.subarray(1));
+        await new Promise(r => setTimeout(r, 20));
+      }
+
+      audioReportsSent = 0;
+      lastSendTimestamp = 0;
+      intervalHistory = [];
+      hidWriteTimes = [];
+      fallbackPhase = 0;
+
+      if (clockMode.startsWith('audioworklet')) {
+        try {
+          if (!audioContext || audioContext.state === 'closed') {
+            audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+            isWorkletModuleLoaded = false;
+          }
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          if (!isWorkletModuleLoaded) {
+            const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
+            const workletUrl = URL.createObjectURL(blob);
+            await audioContext.audioWorklet.addModule(workletUrl);
+            isWorkletModuleLoaded = true;
+          }
+
+          const workletMode = (clockMode === 'audioworklet-20') ? '20.0' : '21.333';
+
+          workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {
+            processorOptions: { mode: workletMode }
+          });
+
+          workletNode.port.onmessage = (e) => {
+            if (e.data.type === 'audio-chunk' && isAudioStreaming) {
+              processAndSendPcm(e.data.pcm, e.data.frames);
+            }
+          };
+
+          workletNode.port.postMessage({
+            action: 'updateParams',
+            frequency,
+            amplitude,
+            mode: workletMode
+          });
+
+          const dummyGain = audioContext.createGain();
+          dummyGain.gain.value = 0.0;
+          workletNode.connect(dummyGain);
+          dummyGain.connect(audioContext.destination);
+
+          metricHapticStatus.textContent = isHapticsEnabled ? `${hapticFreqSlider.value} Hz HD Wave` : "Inactive";
+          metricHapticStatus.style.color = isHapticsEnabled ? "var(--haptic)" : "var(--text-sub)";
+          log(`[Audio & Haptics] AudioWorklet running on hardware DAC clock!`);
+        } catch (err) {
+          log(`AudioWorklet initialization failed: ${err.message}. Falling back to Web Worker.`);
+          timerWorker.postMessage({ action: 'start', interval: 21.333333 });
+        }
+      } else {
+        log(`[Audio] Web Worker precision clock started (21.333ms interval)...`);
+        timerWorker.postMessage({ action: 'start', interval: 21.333333 });
+      }
+    }
+
+    function stopAudioStream() {
+      if (!isAudioStreaming) return;
+      isAudioStreaming = false;
+
+      timerWorker.postMessage({ action: 'stop' });
+
+      if (workletNode) {
+        workletNode.port.postMessage({ action: 'stop' });
+        try { workletNode.disconnect(); } catch (e) {}
+        workletNode = null;
+      }
+      if (audioContext && audioContext.state === 'running') {
+        audioContext.suspend();
+      }
+
+      metricHapticStatus.textContent = "Inactive";
+      metricHapticStatus.style.color = "var(--text-sub)";
+      toggleAudioBtn.textContent = "▶ Start Tone & Haptics Stream";
+      toggleAudioBtn.className = "btn btn-success";
+      log(`[Audio & Haptics] Stream stopped. Total reports sent: ${audioReportsSent}`);
+    }
+
+    function updateParams() {
+      const frequency = parseFloat(freqSlider.value);
+      const amplitude = parseFloat(ampSlider.value);
+      const clockMode = clockSourceSelect.value;
+      const workletMode = (clockMode === 'audioworklet-20') ? '20.0' : '21.333';
+
+      if (workletNode) {
+        workletNode.port.postMessage({ action: 'updateParams', frequency, amplitude, mode: workletMode });
+      }
+    }
+
+    // --- Heartbeat Logic ---
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      toggleHeartbeatBtn.textContent = "Stop LED Heartbeat";
+      toggleHeartbeatBtn.className = "btn btn-danger";
+
+      const cycle = async () => {
+        const color = HEARTBEAT_COLORS[currentColorIndex];
+        currentColorIndex = (currentColorIndex + 1) % HEARTBEAT_COLORS.length;
+
+        colorPreview.style.backgroundColor = color.hex;
+        colorNameText.textContent = `Color: ${color.name}`;
+
+        const vol = parseInt(volumeSlider.value, 10);
+        const tgt = audioTargetSelect.value;
+
+        try {
+          await sendStateReport({ r: color.r, g: color.g, b: color.b, volume: vol, target: tgt });
+        } catch (e) {}
+      };
+
+      cycle();
+      heartbeatTimer = setInterval(cycle, 1000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      toggleHeartbeatBtn.textContent = "Start LED Heartbeat";
+      toggleHeartbeatBtn.className = "btn btn-primary";
+      colorNameText.textContent = "Color: Idle";
+      colorPreview.style.backgroundColor = "#000000";
+    }
+
+    // --- Event Listeners ---
+    connectBtn.addEventListener("click", async () => {
+      try {
+        log("Requesting WebHID device (Vendor: 0x054C, Product: 0x0CE6)...");
+        const devices = await navigator.hid.requestDevice({
+          filters: [{ vendorId: 0x054C, productId: 0x0CE6 }]
+        });
+
+        if (devices.length === 0) {
+          log("No device selected.");
+          return;
+        }
+
+        hidDevice = devices[0];
+        if (!hidDevice.opened) {
+          await hidDevice.open();
+        }
+
+        log(`Connected to: ${hidDevice.productName} (Vendor: 0x${hidDevice.vendorId.toString(16)}, Product: 0x${hidDevice.productId.toString(16)})`);
+        updateUiState();
+
+        for (let i = 0; i < 3; i++) {
+          await sendStateReport({ r: 0, g: 100, b: 255 });
+          await new Promise(r => setTimeout(r, 30));
+        }
+        log("Initial handshake completed successfully!");
+      } catch (err) {
+        log(`Connection failed: ${err.message}`);
+      }
+    });
+
+    disconnectBtn.addEventListener("click", async () => {
+      if (hidDevice && hidDevice.opened) {
+        stopAudioStream();
+        stopHeartbeat();
+        await hidDevice.close();
+        hidDevice = null;
+        log("Disconnected from device.");
+        updateUiState();
+      }
+    });
+
+    navigator.hid.addEventListener('disconnect', (e) => {
+      if (e.device === hidDevice) {
+        log("Device physically disconnected.");
+        hidDevice = null;
+        updateUiState();
+      }
+    });
+
+    toggleAudioBtn.addEventListener("click", () => {
+      if (isAudioStreaming) {
+        stopAudioStream();
+      } else {
+        startAudioStream();
+      }
+    });
+
+    toggleHeartbeatBtn.addEventListener("click", () => {
+      if (heartbeatTimer) {
+        stopHeartbeat();
+      } else {
+        startHeartbeat();
+      }
+    });
+
+    toggleHapticBtn.addEventListener("click", () => {
+      isHapticsEnabled = !isHapticsEnabled;
+      toggleHapticBtn.textContent = isHapticsEnabled ? "Disable HD Haptics Waveform" : "Enable HD Haptics Waveform";
+      toggleHapticBtn.className = isHapticsEnabled ? "btn btn-haptic" : "btn btn-secondary";
+      metricHapticStatus.textContent = isHapticsEnabled ? `${hapticFreqSlider.value} Hz HD Wave` : "Inactive";
+      metricHapticStatus.style.color = isHapticsEnabled ? "var(--haptic)" : "var(--text-sub)";
+      log(`[HD Haptics] Waveform generator ${isHapticsEnabled ? 'ENABLED' : 'DISABLED'}`);
+    });
+
+    hapticFreqSlider.addEventListener("input", (e) => {
+      hapticFreqVal.textContent = e.target.value;
+      if (isHapticsEnabled) metricHapticStatus.textContent = `${e.target.value} Hz HD Wave`;
+    });
+
+    hapticAmpSlider.addEventListener("input", (e) => {
+      hapticAmpVal.textContent = e.target.value;
+    });
+
+    freqSlider.addEventListener("input", (e) => {
+      freqVal.textContent = e.target.value;
+      updateParams();
+    });
+
+    ampSlider.addEventListener("input", (e) => {
+      ampVal.textContent = e.target.value;
+      updateParams();
+    });
+
+    audioTargetSelect.addEventListener("change", async (e) => {
+      const tgt = e.target.value;
+      const vol = parseInt(volumeSlider.value, 10);
+      log(`Audio target switched to: ${tgt.toUpperCase()}`);
+      if (hidDevice && hidDevice.opened) {
+        await sendStateReport({ volume: vol, target: tgt });
+      }
+    });
+
+    clockSourceSelect.addEventListener("change", () => {
+      if (isAudioStreaming) {
+        stopAudioStream();
+        startAudioStream();
+      }
+    });
+
+    volumeSlider.addEventListener("input", (e) => {
+      volumeVal.textContent = e.target.value;
+      if (hidDevice && hidDevice.opened && !isAudioStreaming) {
+        sendStateReport({ volume: parseInt(e.target.value, 10), target: audioTargetSelect.value });
+      }
+    });
+
+    clearLogBtn.addEventListener("click", () => {
+      consoleLog.value = "";
+    });
+
+    initOpus();
+  </script>
+</body>
+</html>
