@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DualSense WebHID - Protocol, Audio & HD Haptics Lab</title>
+  <title>DualSense Bluetooth Audio & Haptics Demo</title>
   <style>
     :root {
       --bg-color: #0f111a;
@@ -272,113 +272,70 @@
 <body>
   <div class="container">
     <header>
-      <h1>DualSense WebHID Lab</h1>
-      <p class="subtitle">Hardware-Clocked Audio & Audio-Driven HD Waveform Haptics over Bluetooth</p>
+      <h1>DualSense Bluetooth Audio & Haptics Demo</h1>
     </header>
 
     <!-- Connection Section -->
     <div class="card">
       <div class="card-title">
-        <span>Controller Connection</span>
+        <span>Connection</span>
         <div id="connection-status" class="status-badge">
           <div class="status-dot"></div>
           <span id="status-text">Disconnected</span>
         </div>
       </div>
-      <div class="row">
+      <div class="row" style="margin-bottom: 15px;">
         <button id="connect-btn" class="btn btn-primary">Connect DualSense</button>
         <button id="disconnect-btn" class="btn btn-danger" disabled>Disconnect</button>
         <span id="encoder-status" style="font-size: 0.85rem; color: var(--text-sub);">Loading libopus-wasm...</span>
+      </div>
+
+      <div class="row">
+        <div class="color-preview-box" id="current-color-preview" style="background-color: #000000;" title="Current Target Color"></div>
+        <div style="display: flex; flex-direction: column; justify-content: center;">
+          <span style="font-size: 0.85rem; font-weight: 600;" id="color-name-text">Color: Idle</span>
+        </div>
       </div>
     </div>
 
     <!-- Audio-Driven HD Waveform Haptics Section -->
     <div class="card" style="border-color: var(--haptic);">
       <div class="card-title">
-        <span>📳 Audio-Driven HD Haptics (Report 0x39 Offsets 10-139 Waveforms)</span>
-        <span style="font-size: 0.85rem; color: var(--text-sub);">Streams real-time low-frequency PCM waveforms to LRA voice-coils</span>
+        <span>Audio and Haptics</span>
       </div>
 
       <div class="row" style="margin-bottom: 15px;">
-        <button id="toggle-haptic-btn" class="btn btn-haptic">Enable HD Haptics Waveform</button>
-
-        <div class="control-group">
-          <span class="control-label">Haptic Frequency: <span id="haptic-freq-val">120</span> Hz</span>
-          <input type="range" id="haptic-freq-slider" min="40" max="350" step="5" value="120">
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Haptic Intensity: <span id="haptic-amp-val">100</span>%</span>
-          <input type="range" id="haptic-amp-slider" min="0" max="100" step="5" value="100">
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Waveform Pattern</span>
-          <select id="haptic-pattern-select">
-            <option value="sine" selected>Sine Wave (Smooth LRA Resonance)</option>
-            <option value="pulse">Pulse / Kick Beat (10 Hz Burst)</option>
-            <option value="square">Square Wave (Crisp Texture)</option>
-            <option value="stereo-pan">Stereo Pan (Left ⟷ Right)</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Haptic Low-Pass Cutoff: <span id="haptic-cutoff-val">150</span> Hz</span>
-          <input type="range" id="haptic-cutoff-slider" min="40" max="600" step="10" value="150">
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Haptic Gain / Boost: <span id="haptic-gain-val">1.5</span>x</span>
-          <input type="range" id="haptic-gain-slider" min="0.5" max="32.0" step="0.1" value="1.5">
-        </div>
-      </div>
-    </div>
-
-    <!-- Audio Streaming Section -->
-    <div class="card" style="border-color: var(--accent);">
-      <div class="card-title">
-        <span>🎵 Acoustic Audio Stream (Report 0x39 Full Audio)</span>
-        <span style="font-size: 0.85rem; color: var(--text-sub);">C# Sync: 8 Audio Blocks (1024 frames @ 48kHz = exactly 21.333ms)</span>
-      </div>
-
-      <div class="row" style="margin-bottom: 15px;">
-        <button id="toggle-audio-btn" class="btn btn-success" disabled>▶ Start Tone & Haptics Stream</button>
-
-        <div class="control-group">
-          <span class="control-label">Target Output</span>
-          <select id="audio-target-select">
-            <option value="speaker" selected>Controller Speaker</option>
-            <option value="headset">3.5mm Headset Jack</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Clock Mode</span>
-          <select id="clock-source-select">
-            <option value="audioworklet-21" selected>Web Audio 21.333ms (8 blocks / 1024 frames resampled)</option>
-            <option value="audioworklet-20">Web Audio 20.000ms (960 frames direct)</option>
-            <option value="worker">Web Worker Timer (21.333ms)</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Speaker Tone Frequency: <span id="freq-val">440</span> Hz</span>
-          <input type="range" id="freq-slider" min="100" max="1500" step="10" value="440">
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Speaker Volume: <span id="amp-val">0.08</span></span>
-          <input type="range" id="amp-slider" min="0.00" max="0.30" step="0.01" value="0.08">
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Hardware Master Volume: <span id="volume-val">100</span>/127</span>
-          <input type="range" id="volume-slider" min="0" max="127" value="100">
-        </div>
+        <button id="toggle-audio-btn" class="btn btn-success" disabled>▶ Start MP3</button>
 
         <div class="control-group">
           <span class="control-label">Load Custom MP3</span>
           <input type="file" id="mp3-file-input" accept="audio/mp3, audio/mpeg" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom: 15px;">
+        <button id="toggle-sound-btn" class="btn btn-haptic">🔊 Sound on</button>
+
+        <div class="control-group">
+          <span class="control-label">Output select</span>
+          <select id="audio-target-select">
+            <option value="speaker" selected>Speaker</option>
+            <option value="headset">Headset</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Volume: <span id="volume-val">100</span>%</span>
+          <input type="range" id="volume-slider" min="0" max="100" value="100">
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom: 15px;">
+        <button id="toggle-haptic-btn" class="btn btn-haptic">🌶️ Haptics on</button>
+
+        <div class="control-group">
+          <span class="control-label">Intensity: <span id="haptic-amp-val">100</span>%</span>
+          <input type="range" id="haptic-amp-slider" min="0" max="100" step="5" value="100">
         </div>
       </div>
 
@@ -388,37 +345,8 @@
           <div class="metric-value" id="metric-audio-sent">0</div>
         </div>
         <div class="metric-box">
-          <div class="metric-label">Packet Counter</div>
-          <div class="metric-value" id="metric-pkt-ctr">0</div>
-        </div>
-        <div class="metric-box">
           <div class="metric-label">Average Interval</div>
           <div class="metric-value" id="metric-interval">0.0 ms</div>
-        </div>
-        <div class="metric-box">
-          <div class="metric-label">HD Haptics State</div>
-          <div class="metric-value" id="metric-haptic-status" style="font-size: 1.1rem; color: var(--haptic);">Inactive</div>
-        </div>
-        <div class="metric-box">
-          <div class="metric-label">Errors</div>
-          <div class="metric-value" id="metric-errors" style="color: var(--success);">0</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Heartbeat / LED Section -->
-    <div class="card">
-      <div class="card-title">
-        <span>Lightbar Heartbeat (Report 0x32)</span>
-        <span style="font-size: 0.85rem; color: var(--text-sub);">Visual connection validation</span>
-      </div>
-
-      <div class="row">
-        <button id="toggle-heartbeat-btn" class="btn btn-primary" disabled>Start LED Heartbeat</button>
-        <div class="color-preview-box" id="current-color-preview" style="background-color: #000000;" title="Current Target Color"></div>
-        <div style="display: flex; flex-direction: column; justify-content: center;">
-          <span style="font-size: 0.85rem; font-weight: 600;" id="color-name-text">Color: Idle</span>
-          <span style="font-size: 0.75rem; color: var(--text-sub);" id="crc-display">Last CRC: None</span>
         </div>
       </div>
     </div>
@@ -426,15 +354,15 @@
     <!-- Diagnostic Log Console -->
     <div class="card">
       <div class="card-title">
-        <span>Diagnostic Log</span>
-        <button id="clear-log-btn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">Clear Log</button>
+        <span>Log</span>
+        <button id="clear-log-btn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">Clear</button>
       </div>
       <textarea id="console-log" readonly placeholder="Diagnostic logs will appear here..."></textarea>
     </div>
   </div>
 
   <script type="module">
-    import { createEncoder } from 'https://cdn.jsdelivr.net/npm/libopus-wasm/+esm';
+    import { createEncoder } from "./libopus/index.js";
 
     // --- Sony DualSense CRC32 Implementation ---
     const CRC32_TABLE = new Uint32Array(256);
@@ -480,33 +408,21 @@
     }
 
     // --- AudioWorklet Processor Source ---
-const audioWorkletCode = `
+    const audioWorkletCode = `
       class DualSenseAudioProcessor extends AudioWorkletProcessor {
         constructor(options) {
           super();
-          this.mode = (options && options.processorOptions && options.processorOptions.mode) || '21.333';
-          this.targetFrames = (this.mode === '20.0') ? 960 : 1024;
+          this.targetFrames = 1024;
           this.samplesAccumulated = 0;
           this.bufferL = new Float32Array(1024);
           this.bufferR = new Float32Array(1024);
-          this.frequency = 440;
-          this.amplitude = 0.08;
-          this.phase = 0;
           this.active = true;
-          
+
           this.customPcm = null;
           this.customIndex = 0;
 
           this.port.onmessage = (e) => {
-            if (e.data.action === 'updateParams') {
-              if (e.data.frequency !== undefined) this.frequency = e.data.frequency;
-              if (e.data.amplitude !== undefined) this.amplitude = e.data.amplitude;
-              if (e.data.mode !== undefined) {
-                this.mode = e.data.mode;
-                this.targetFrames = (this.mode === '20.0') ? 960 : 1024;
-                this.samplesAccumulated = 0;
-              }
-            } else if (e.data.action === 'setCustomAudio') {
+            if (e.data.action === 'setCustomAudio') {
               this.customPcm = e.data.pcm; // Interleaved Float32Array
               this.customIndex = 0;
             } else if (e.data.action === 'stop') {
@@ -538,18 +454,14 @@ const audioWorkletCode = `
             this.bufferR[this.samplesAccumulated] = sampleR;
             this.samplesAccumulated++;
 
-            if (this.samplesAccumulated === this.targetFrames) {
-              const numSamples = this.targetFrames;
-              const interleaved = new Float32Array(numSamples * 2);
-              for (let s = 0; s < numSamples; s++) {
-                interleaved[s * 2] = this.bufferL[s];
-                interleaved[s * 2 + 1] = this.bufferR[s];
+            if (this.samplesAccumulated === 1024) {
+              const frames = 1024 * 2;
+              const pcm = new Float32Array(frames);
+              for (let s = 0; s < frames; s++) {
+                pcm[s * 2] = this.bufferL[s];
+                pcm[s * 2 + 1] = this.bufferR[s];
               }
-              this.port.postMessage({
-                type: 'audio-chunk',
-                pcm: interleaved,
-                frames: numSamples
-              }, [interleaved.buffer]);
+              this.port.postMessage({type: 'audio-chunk', pcm, frames}, [pcm.buffer]);
               this.samplesAccumulated = 0;
             }
           }
@@ -558,35 +470,6 @@ const audioWorkletCode = `
       }
       registerProcessor('dualsense-audio-processor', DualSenseAudioProcessor);
     `;
-
-    // --- Inline Web Worker for Fallback Timer ---
-    const workerScript = `
-      let timerId = null;
-      let intervalMs = 21.333333;
-      let nextExpected = 0;
-
-      function scheduleTick() {
-        nextExpected += intervalMs;
-        const now = performance.now();
-        const delay = Math.max(0, nextExpected - now);
-        timerId = setTimeout(() => {
-          postMessage('tick');
-          scheduleTick();
-        }, delay);
-      }
-
-      onmessage = (e) => {
-        if (e.data.action === 'start') {
-          intervalMs = e.data.interval || 21.333333;
-          nextExpected = performance.now();
-          scheduleTick();
-        } else if (e.data.action === 'stop') {
-          if (timerId) clearTimeout(timerId);
-          timerId = null;
-        }
-      };
-    `;
-    const timerWorker = new Worker(URL.createObjectURL(new Blob([workerScript], { type: 'application/javascript' })));
 
     // --- Protocol Constants & State ---
     const SAMPLE_RATE = 48000;
@@ -605,27 +488,24 @@ const audioWorkletCode = `
 
     let sequenceCounter = 0;
     let packetCounter = 0;
-    let audioReportsSent = 0;
-    let reportErrorsCount = 0;
 
     let isAudioStreaming = false;
     let heartbeatTimer = null;
     let currentColorIndex = 0;
-
-    // HD Haptic Waveform State
+    let isSoundEnabled = true;
     let isHapticsEnabled = true;
-    let hapticPhase = 0;
-    let hapticBeatCounter = 0;
+    let currentVolume = 100;
+    let currentHaptics = 100;
 
-    // Timing metrics
-    let lastSendTimestamp = 0;
-    let intervalHistory = [];
-    let hidWriteTimes = [];
-    let fallbackPhase = 0;
-    
+    // Metrics
+    let metrics = {
+      lastSendTimestamp: 0,
+      intervalHistory: [],
+      audioReportsSent: 0,
+    };
+
     let customAudioBuffer = null;
     let customAudioIndex = 0;
-    let isCustomAudioLoaded = false;
 
     const HEARTBEAT_COLORS = [
       { name: "Vivid Red", hex: "#FF0000", r: 255, g: 0, b: 0 },
@@ -648,102 +528,93 @@ const audioWorkletCode = `
     const statusText = document.getElementById("status-text");
     const encoderStatus = document.getElementById("encoder-status");
     const toggleAudioBtn = document.getElementById("toggle-audio-btn");
-    const clockSourceSelect = document.getElementById("clock-source-select");
-    const freqSlider = document.getElementById("freq-slider");
-    const freqVal = document.getElementById("freq-val");
-    const ampSlider = document.getElementById("amp-slider");
-    const ampVal = document.getElementById("amp-val");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeVal = document.getElementById("volume-val");
     const audioTargetSelect = document.getElementById("audio-target-select");
+    const toggleSoundBtn = document.getElementById("toggle-sound-btn");
     const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
-    const hapticFreqSlider = document.getElementById("haptic-freq-slider");
-    const hapticFreqVal = document.getElementById("haptic-freq-val");
     const hapticAmpSlider = document.getElementById("haptic-amp-slider");
     const hapticAmpVal = document.getElementById("haptic-amp-val");
-    const hapticPatternSelect = document.getElementById("haptic-pattern-select");
     const metricAudioSent = document.getElementById("metric-audio-sent");
-    const metricPktCtr = document.getElementById("metric-pkt-ctr");
     const metricInterval = document.getElementById("metric-interval");
-    const metricHapticStatus = document.getElementById("metric-haptic-status");
-    const metricErrors = document.getElementById("metric-errors");
-    const toggleHeartbeatBtn = document.getElementById("toggle-heartbeat-btn");
     const colorPreview = document.getElementById("current-color-preview");
     const colorNameText = document.getElementById("color-name-text");
-    const crcDisplay = document.getElementById("crc-display");
     const consoleLog = document.getElementById("console-log");
     const clearLogBtn = document.getElementById("clear-log-btn");
     const mp3FileInput = document.getElementById("mp3-file-input");
-    const hapticCutoffSlider = document.getElementById("haptic-cutoff-slider");
-    const hapticCutoffVal = document.getElementById("haptic-cutoff-val");
-    const hapticGainSlider = document.getElementById("haptic-gain-slider");
-    const hapticGainVal = document.getElementById("haptic-gain-val");
-
-    hapticCutoffSlider.addEventListener("input", (e) => {
-      hapticCutoffVal.textContent = e.target.value;
-      if (window.activeHapticFilter) {
-        window.activeHapticFilter.frequency.setValueAtTime(parseFloat(e.target.value), audioContext.currentTime);
-      }
-    });
-
-    hapticGainSlider.addEventListener("input", (e) => {
-      hapticGainVal.textContent = e.target.value;
-    });
 
     mp3FileInput.addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-
-      log(`[Audio] Loading MP3 file: ${file.name}...`);
+      loadMp3(file);
+    });
+    const defaultMp3FileName = 'Footprints (take 001).mp3';
+    fetch(defaultMp3FileName).then(async (response) => {
+      if (!response.ok) {
+        log(`[Audio Error] Failed to load ${defaultMp3FileName}`);
+        return;
+      }
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        
-        // Ensure an AudioContext exists for decoding
-        if (!audioContext || audioContext.state === 'closed') {
-          audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-        }
-        
-        const decodedAudio = await audioContext.decodeAudioData(arrayBuffer);
-        
-        // OfflineAudioContext to force resampling to exactly 48kHz stereo
-        const offlineCtx = new OfflineAudioContext(
-          CHANNELS, 
-          Math.ceil(decodedAudio.duration * SAMPLE_RATE), 
-          SAMPLE_RATE
-        );
-        
-        const source = offlineCtx.createBufferSource();
-        source.buffer = decodedAudio;
-        source.connect(offlineCtx.destination);
-        source.start(0);
-        
-        customAudioBuffer = await offlineCtx.startRendering();
-        // Extract interleaved channel data from the rendered AudioBuffer
-        const chanL = customAudioBuffer.getChannelData(0);
-        const chanR = customAudioBuffer.numberOfChannels > 1 ? customAudioBuffer.getChannelData(1) : chanL;
-        const interleavedCustom = new Float32Array(chanL.length * 2);
-        for (let i = 0; i < chanL.length; i++) {
-          interleavedCustom[i * 2] = chanL[i];
-          interleavedCustom[i * 2 + 1] = chanR[i];
-        }
-
-        if (workletNode) {
-          window.customPcm = interleavedCustom;
-          window.hapticIndex = 0;
-          workletNode.port.postMessage({
-            action: 'setCustomAudio',
-            pcm: interleavedCustom
-          }, [interleavedCustom.buffer]);
-        }
-
-        customAudioIndex = 0;
-        isCustomAudioLoaded = true;
-        
-        log(`[Audio] MP3 decoded & resampled successfully! Duration: ${decodedAudio.duration.toFixed(2)}s`);
+        const audioBuffer = await response.arrayBuffer();
+        loadMp3FromBuffer(audioBuffer);
       } catch (err) {
         log(`[Audio Error] Failed to decode MP3: ${err.message}`);
       }
     });
+
+    // Extract interleaved channel data from the rendered AudioBuffer
+    function createInterleaved(buffer) {
+      const chanL = buffer.getChannelData(0);
+      const chanR = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : chanL;
+      const interleaved = new Float32Array(chanL.length * 2);
+      for (let i = 0; i < chanL.length; i++) {
+        interleaved[i * 2] = chanL[i];
+        interleaved[i * 2 + 1] = chanR[i];
+      }
+      return interleaved;
+    }
+
+    async function loadMp3FromBuffer(buffer) {
+      // Ensure an AudioContext exists for decoding
+      if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+      }
+
+      const decodedAudio = await audioContext.decodeAudioData(buffer);
+
+      // OfflineAudioContext to force resampling to exactly 48kHz stereo
+      const offlineCtx = new OfflineAudioContext(
+        CHANNELS,
+        Math.ceil(decodedAudio.duration * SAMPLE_RATE),
+        SAMPLE_RATE
+      );
+
+      const source = offlineCtx.createBufferSource();
+      source.buffer = decodedAudio;
+      source.connect(offlineCtx.destination);
+      source.start(0);
+
+      customAudioBuffer = await offlineCtx.startRendering();
+
+      if (workletNode) {
+        const pcm = createInterleaved(customAudioBuffer);
+        workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
+      }
+
+      customAudioIndex = 0;
+      toggleAudioBtn.disabled = !encoder || !customAudioBuffer;
+    }
+
+    async function loadMp3(file) {
+      log(`[Audio] Loading MP3 file: ${file.name}...`);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        loadMp3FromBuffer(arrayBuffer);
+        log('[Audio] MP3 decoded & resampled successfully!');
+      } catch (err) {
+        log(`[Audio Error] Failed to decode MP3: ${err.message}`);
+      }
+    }
 
     function log(msg) {
       const timestamp = new Date().toLocaleTimeString() + "." + String(new Date().getMilliseconds()).padStart(3, '0');
@@ -775,21 +646,19 @@ const audioWorkletCode = `
 
     function updateUiState() {
       const isConnected = hidDevice && hidDevice.opened;
-      const isOpusReady = encoder !== null;
 
       if (isConnected) {
         connectionStatus.className = "status-badge connected";
         statusText.textContent = `Connected: ${hidDevice.productName || 'DualSense'}`;
         connectBtn.disabled = true;
         disconnectBtn.disabled = false;
-        toggleHeartbeatBtn.disabled = false;
-        toggleAudioBtn.disabled = !isOpusReady;
+        toggleAudioBtn.disabled = !encoder || !customAudioBuffer;
+        startHeartbeat();
       } else {
         connectionStatus.className = "status-badge";
         statusText.textContent = "Disconnected";
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
-        toggleHeartbeatBtn.disabled = true;
         toggleAudioBtn.disabled = true;
         if (isAudioStreaming) stopAudioStream();
         stopHeartbeat();
@@ -811,24 +680,39 @@ const audioWorkletCode = `
       report[3] = 0x3F;
 
       const state = 4;
+      // 0b1011_0000:
+      // ~EnableRumbleEmulation
+      // ~UseRumbleNotHaptics
+      // ~AllowRightTriggerFFB
+      // ~AllowLeftTriggerFFB
+      // AllowHeadphoneVolume
+      // AllowSpeakerVolume
+      // ~AllowMicVolume
+      // AllowAudioControl
       report[state + 0] = 0xB0;
-      report[state + 1] = 0x96;
+      // 0b1011_0110:
+      // ~AllowMuteLight
+      // AllowAudioMute
+      // AllowLedColor
+      // ~ResetLights
+      // AllowPlayerIndicators
+      // AllowHapticLowPassFilter
+      // ~AllowMotorPowerLevel
+      // AllowAudioControl2
+      report[state + 1] = 0xB6;
 
-      report[state + 4] = volume & 0x7F;
-      report[state + 5] = volume & 0x7F;
-      report[state + 6] = 0x40;
-
-      report[state + 7] = (target === 'headset') ? 0x20 : 0x00;
-      report[state + 9] = 0x00;
-      report[state + 37] = 0x03;
-
-      report[state + 38] = 0x02;
-      report[state + 41] = 0x02;
-      report[state + 42] = 0x00;
-      report[state + 43] = 0x04;
-      report[state + 44] = r & 0xFF;
-      report[state + 45] = g & 0xFF;
-      report[state + 46] = b & 0xFF;
+      report[state + 4] = volume & 0x7F;  // VolumeHeadphones
+      report[state + 5] = volume & 0x7F;  // VolumeSpeaker
+      report[state + 6] = 0x40;  // VolumeMic
+      report[state + 7] = (target === 'headset') ? 0x20 : 0x00;  // AudioControl OutputPathSelect
+      report[state + 37] = 0x03;  // SpeakerCompPreGain
+      report[state + 38] = 0x02;  // AllowColorLightFadeAnimation
+      report[state + 39] = 0x01;  // HapticLowPassFilter
+      report[state + 41] = 0x02;  // LightFadeAnimation
+      report[state + 43] = 0x04;  // PlayerLight3
+      report[state + 44] = r & 0xFF;  // LedRed
+      report[state + 45] = g & 0xFF;  // LedGreen
+      report[state + 46] = b & 0xFF;  // LedBlue
 
       fillSonyCrc(report);
       return report;
@@ -840,7 +724,7 @@ const audioWorkletCode = `
       await hidDevice.sendReport(report[0], report.subarray(1));
     }
 
-// --- Fill 128-Byte HD Haptics Waveform Blocks from Active PCM Chunk ---
+    // --- Fill 128-Byte HD Haptics Waveform Blocks from Active PCM Chunk ---
     function fillHapticBlocks(report, pcmFrame) {
       if (!isHapticsEnabled || !pcmFrame) {
         // Silent neutral haptic blocks
@@ -853,45 +737,53 @@ const audioWorkletCode = `
         return;
       }
 
-      const intensityPct = parseFloat(hapticAmpSlider.value) / 100.0;
-      const hapticGain = parseFloat(hapticGainSlider.value);
-      const ampMax = Math.round(127 * intensityPct * hapticGain);
+      const totalInputFrames = pcmFrame.length / 2;
+      const windowSize = 15;
 
-      // Block 1 (64 bytes: header 0xD2 64 + 62 sample bytes -> 31 pairs)
-      report[10] = 0xD2;
-      report[11] = 64;
+      // Helper to process a single haptic block (31 pairs)
+      function populateBlock(blockHeaderOffset, dataHeaderOffset, startIndex) {
+        report[blockHeaderOffset] = 0xD2;
+        report[blockHeaderOffset + 1] = 64;
 
-      for (let i = 0; i < 31; i++) {
-        // Grab directly from the active audio frame (interleaved left/right)
-        // We use modulo wrapping just in case the frame length varies
-        let sampleIdx = (i * 2) % pcmFrame.length;
-        const scale = 1.0;
-        let leftSample = Math.min(1.0, pcmFrame[sampleIdx] * scale);
-        let rightSample = Math.min(1.0, pcmFrame[sampleIdx + 1] * scale);
+        for (let i = 0; i < 31; i++) {
+          const pairIndex = startIndex + i;
+          const windowStart = Math.floor(pairIndex * windowSize);
+          const windowEnd = Math.min(Math.floor((pairIndex + 1) * windowSize), totalInputFrames);
 
-        let leftVal = Math.round(leftSample * ampMax);
-        let rightVal = Math.round(rightSample * ampMax);
+          let maxLeft = 0;
+          let maxRight = 0;
+          let peakLeft = 0;
+          let peakRight = 0;
 
-        report[12 + i * 2] = leftVal & 0xFF;
-        report[12 + i * 2 + 1] = rightVal & 0xFF;
+          // Find peak absolute amplitude within the window to preserve transients
+          for (let f = windowStart; f < windowEnd; f++) {
+            const lVal = pcmFrame[f * 2];
+            const rVal = pcmFrame[f * 2 + 1];
+
+            if (Math.abs(lVal) > Math.abs(peakLeft)) peakLeft = lVal;
+            if (Math.abs(rVal) > Math.abs(peakRight)) peakRight = rVal;
+          }
+
+          const scale = 4.0;
+          peakLeft *= scale;
+          peakRight *= scale;
+
+          if (Math.abs(peakLeft) < 0.005) peakLeft = 0;
+          if (Math.abs(peakRight) < 0.005) peakRight = 0;
+
+          if (Math.abs(peakLeft) > 1.0) peakLeft = 1.0;
+          if (Math.abs(peakRight) > 1.0) peakRight = 1.0;
+
+          report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
+          report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
+        }
       }
 
-      // Block 2 (64 bytes: header 0xD2 64 + 62 sample bytes -> 31 pairs)
-      report[74] = 0xD2;
-      report[75] = 64;
+      // Block 1: pairs 0 to 30
+      populateBlock(10, 12, 0);
 
-      for (let i = 0; i < 31; i++) {
-        // Continue offset into the frame for Block 2 (pairs 31 to 61)
-        let sampleIdx = ((i + 31) * 2) % pcmFrame.length;
-        let leftSample = pcmFrame[sampleIdx];
-        let rightSample = pcmFrame[sampleIdx + 1];
-
-        let leftVal = Math.round(leftSample * ampMax);
-        let rightVal = Math.round(rightSample * ampMax);
-
-        report[76 + i * 2] = leftVal & 0xFF;
-        report[76 + i * 2 + 1] = rightVal & 0xFF;
-      }
+      // Block 2: pairs 31 to 61
+      populateBlock(74, 76, 31);
     }
 
     // Build 0x39 Full Audio + HD Haptics Report
@@ -903,7 +795,7 @@ const audioWorkletCode = `
       report[1] = getNextSequenceByte();
       report[2] = 0x91;
       report[3] = 0x06;
-      report[4] = 0x7E; 
+      report[4] = 0x7E;
 
       const bufByte = bufferLength & 0xFF;
       report[5] = bufByte;
@@ -953,76 +845,47 @@ const audioWorkletCode = `
         const report = buildAudioReport(encA, encB, pcmForOpus, currentTarget, 64);
         await hidDevice.sendReport(report[0], report.subarray(1));
 
-        audioReportsSent++;
-        metricAudioSent.textContent = audioReportsSent;
-        metricPktCtr.textContent = packetCounter;
+        metrics.audioReportsSent++;
+        metricAudioSent.textContent = metrics.audioReportsSent;
 
         const writeEnd = performance.now();
         const writeDuration = writeEnd - writeStart;
-        hidWriteTimes.push(writeDuration);
-        if (hidWriteTimes.length > 50) hidWriteTimes.shift();
 
-        if (lastSendTimestamp > 0) {
-          const delta = writeStart - lastSendTimestamp;
-          intervalHistory.push(delta);
-          if (intervalHistory.length > 20) intervalHistory.shift();
+        if (metrics.lastSendTimestamp > 0) {
+          const delta = writeStart - metrics.lastSendTimestamp;
+          metrics.intervalHistory.push(delta);
+          if (metrics.intervalHistory.length > 20) metrics.intervalHistory.shift();
 
-          const avgInterval = intervalHistory.reduce((a, b) => a + b, 0) / intervalHistory.length;
+          const avgInterval = metrics.intervalHistory.reduce((a, b) => a + b, 0) / metrics.intervalHistory.length;
           metricInterval.textContent = `${avgInterval.toFixed(1)} ms`;
         }
-        lastSendTimestamp = writeStart;
+        metrics.lastSendTimestamp = writeStart;
 
-        if (audioReportsSent % 100 === 0) {
-          const avgWrite = hidWriteTimes.reduce((a, b) => a + b, 0) / hidWriteTimes.length;
-          const maxWrite = Math.max(...hidWriteTimes);
-          log(`[Audio & Haptics] Reports: ${audioReportsSent} | Interval: ${metricInterval.textContent} | Haptics: ${isHapticsEnabled ? 'Active (' + hapticFreqSlider.value + 'Hz)' : 'Off'}`);
+        if (metrics.audioReportsSent % 100 === 0) {
+          log(`[Audio & Haptics] Reports: ${metrics.audioReportsSent} | Interval: ${metricInterval.textContent} | Sound: ${isSoundEnabled ? 'On' : 'Off'} | Haptics: ${isHapticsEnabled ? 'On' : 'Off'}`);
         }
       } catch (err) {
-        reportErrorsCount++;
-        metricErrors.textContent = reportErrorsCount;
         log(`[Audio Error] Send failed: ${err.message}`);
       }
     }
 
-    // Worker fallback tick
-    timerWorker.onmessage = (e) => {
-      if (e.data === 'tick' && clockSourceSelect.value === 'worker') {
-        const frequency = parseFloat(freqSlider.value);
-        const amplitude = parseFloat(ampSlider.value);
-        const phaseIncrement = (2.0 * Math.PI * frequency) / SAMPLE_RATE;
-        const pcm1024 = new Float32Array(1024 * 2);
-
-        for (let s = 0; s < 1024; s++) {
-          const val = Math.sin(fallbackPhase) * amplitude;
-          fallbackPhase += phaseIncrement;
-          if (fallbackPhase >= 2.0 * Math.PI) fallbackPhase -= 2.0 * Math.PI;
-
-          pcm1024[s * 2] = val;
-          pcm1024[s * 2 + 1] = val;
-        }
-        processAndSendPcm(pcm1024, 1024);
-      }
-    };
-
     // --- Audio & Haptic Streaming Controls ---
     async function startAudioStream() {
-      if (isAudioStreaming || !hidDevice || !encoder) return;
+      if (isAudioStreaming || !hidDevice || !encoder || !customAudioBuffer) return;
 
       isAudioStreaming = true;
-      toggleAudioBtn.textContent = "⏹ Stop Tone & Haptics Stream";
+      toggleAudioBtn.textContent = "⏹ Stop MP3";
       toggleAudioBtn.className = "btn btn-danger pulse";
 
       const target = audioTargetSelect.value;
-      const volume = parseInt(volumeSlider.value, 10);
-      const frequency = parseFloat(freqSlider.value);
-      const amplitude = parseFloat(ampSlider.value);
-      const clockMode = clockSourceSelect.value;
+      const volume = currentVolume;
+      const haptics = currentHaptics;
 
-      log(`[Audio & Haptics] Initializing stream (Target: ${target}, Vol: ${volume}, Haptics: ${isHapticsEnabled ? 'ON' : 'OFF'})...`);
+      log(`[Audio & Haptics] Initializing stream (Target: ${target}, Vol: ${volume}, Sound: ${isSoundEnabled ? 'ON' : 'OFF'}, Haptics: ${isHapticsEnabled ? 'ON' : 'OFF'})...`);
 
       for (let i = 0; i < 8; i++) {
         if (!isAudioStreaming) return;
-        await sendStateReport({ r: 0, g: 255, b: 120, volume, target });
+        await sendStateReport({ r: 0, g: 255, b: 120, volume, haptics, target });
         await new Promise(r => setTimeout(r, 20));
       }
 
@@ -1033,88 +896,51 @@ const audioWorkletCode = `
 
       for (let i = 0; i < 8; i++) {
         if (!isAudioStreaming) break;
-        const report = buildAudioReport(encodedSilenceA, encodedSilenceB, target, 64);
+        const report = buildAudioReport(encodedSilenceA, encodedSilenceB, [], target, 64);
         await hidDevice.sendReport(report[0], report.subarray(1));
         await new Promise(r => setTimeout(r, 20));
       }
 
-      audioReportsSent = 0;
-      lastSendTimestamp = 0;
-      intervalHistory = [];
-      hidWriteTimes = [];
-      fallbackPhase = 0;
+      metrics.audioReportsSent = 0;
+      metrics.lastSendTimestamp = 0;
+      metrics.intervalHistory = [];
 
-      if (clockMode.startsWith('audioworklet')) {
-        try {
-          if (!audioContext || audioContext.state === 'closed') {
-            audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-            isWorkletModuleLoaded = false;
-          }
-          if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-          }
-
-          if (!isWorkletModuleLoaded) {
-            const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
-            const workletUrl = URL.createObjectURL(blob);
-            await audioContext.audioWorklet.addModule(workletUrl);
-            isWorkletModuleLoaded = true;
-          }
-
-          const workletMode = (clockMode === 'audioworklet-20') ? '20.0' : '21.333';
-
-          workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {
-            processorOptions: { mode: workletMode }
-          });
-
-          // Create a low-pass filter node for the haptics channel path
-          const hapticFilter = audioContext.createBiquadFilter();
-          hapticFilter.type = 'lowpass';
-          hapticFilter.frequency.value = parseFloat(hapticCutoffSlider.value);
-
-          // Connect: Worklet -> Haptic Filter -> Destination (or analyser)
-          workletNode.connect(hapticFilter);
-          hapticFilter.connect(audioContext.destination);
-
-          // Save filter reference globally so sliders can update it live
-          window.activeHapticFilter = hapticFilter;
-
-          workletNode.port.onmessage = (e) => {
-            if (e.data.type === 'audio-chunk' && isAudioStreaming) {
-              processAndSendPcm(e.data.pcm, e.data.frames);
-            }
-          };
-
-          workletNode.port.postMessage({
-            action: 'updateParams',
-            frequency,
-            amplitude,
-            mode: workletMode
-          });
-
-          const dummyGain = audioContext.createGain();
-          dummyGain.gain.value = 0.0;
-          workletNode.connect(dummyGain);
-          dummyGain.connect(audioContext.destination);
-
-          metricHapticStatus.textContent = isHapticsEnabled ? `${hapticFreqSlider.value} Hz HD Wave` : "Inactive";
-          metricHapticStatus.style.color = isHapticsEnabled ? "var(--haptic)" : "var(--text-sub)";
-          log(`[Audio & Haptics] AudioWorklet running on hardware DAC clock!`);
-        } catch (err) {
-          log(`AudioWorklet initialization failed: ${err.message}. Falling back to Web Worker.`);
-          timerWorker.postMessage({ action: 'start', interval: 21.333333 });
+      try {
+        if (!audioContext || audioContext.state === 'closed') {
+          audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+          isWorkletModuleLoaded = false;
         }
-      } else {
-        log(`[Audio] Web Worker precision clock started (21.333ms interval)...`);
-        timerWorker.postMessage({ action: 'start', interval: 21.333333 });
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
+
+        if (!isWorkletModuleLoaded) {
+          const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
+          const workletUrl = URL.createObjectURL(blob);
+          await audioContext.audioWorklet.addModule(workletUrl);
+          isWorkletModuleLoaded = true;
+        }
+
+        workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {});
+
+        const pcm = createInterleaved(customAudioBuffer);
+        workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
+
+        workletNode.port.onmessage = (e) => {
+          if (e.data.type === 'audio-chunk' && isAudioStreaming) {
+            processAndSendPcm(e.data.pcm, e.data.frames);
+          }
+        };
+
+        log(`[Audio & Haptics] AudioWorklet running on hardware DAC clock!`);
+      } catch (err) {
+        log(`AudioWorklet initialization failed: ${err.message}`);
       }
     }
 
     function stopAudioStream() {
       if (!isAudioStreaming) return;
       isAudioStreaming = false;
-
-      timerWorker.postMessage({ action: 'stop' });
 
       if (workletNode) {
         workletNode.port.postMessage({ action: 'stop' });
@@ -1125,42 +951,35 @@ const audioWorkletCode = `
         audioContext.suspend();
       }
 
-      metricHapticStatus.textContent = "Inactive";
-      metricHapticStatus.style.color = "var(--text-sub)";
-      toggleAudioBtn.textContent = "▶ Start Tone & Haptics Stream";
+      toggleAudioBtn.textContent = "▶ Start MP3";
       toggleAudioBtn.className = "btn btn-success";
-      log(`[Audio & Haptics] Stream stopped. Total reports sent: ${audioReportsSent}`);
-    }
-
-    function updateParams() {
-      const frequency = parseFloat(freqSlider.value);
-      const amplitude = parseFloat(ampSlider.value);
-      const clockMode = clockSourceSelect.value;
-      const workletMode = (clockMode === 'audioworklet-20') ? '20.0' : '21.333';
-
-      if (workletNode) {
-        workletNode.port.postMessage({ action: 'updateParams', frequency, amplitude, mode: workletMode });
-      }
+      log(`[Audio & Haptics] Stream stopped. Total reports sent: ${metrics.audioReportsSent}`);
     }
 
     // --- Heartbeat Logic ---
     function startHeartbeat() {
       if (heartbeatTimer) return;
-      toggleHeartbeatBtn.textContent = "Stop LED Heartbeat";
-      toggleHeartbeatBtn.className = "btn btn-danger";
 
       const cycle = async () => {
+        if (hidDevice !== null && !hidDevice.opened) {
+          hidDevice = null;
+          stopHeartbeat();
+          log(`HID device closed`);
+          return;
+        }
+
         const color = HEARTBEAT_COLORS[currentColorIndex];
         currentColorIndex = (currentColorIndex + 1) % HEARTBEAT_COLORS.length;
 
         colorPreview.style.backgroundColor = color.hex;
-        colorNameText.textContent = `Color: ${color.name}`;
+        colorNameText.textContent = `LED color: ${color.name}`;
 
-        const vol = parseInt(volumeSlider.value, 10);
-        const tgt = audioTargetSelect.value;
+        const volume = currentVolume;
+        const haptics = currentHaptics;
+        const target = audioTargetSelect.value;
 
         try {
-          await sendStateReport({ r: color.r, g: color.g, b: color.b, volume: vol, target: tgt });
+          await sendStateReport({ r: color.r, g: color.g, b: color.b, volume, haptics, target });
         } catch (e) {}
       };
 
@@ -1173,13 +992,30 @@ const audioWorkletCode = `
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
-      toggleHeartbeatBtn.textContent = "Start LED Heartbeat";
-      toggleHeartbeatBtn.className = "btn btn-primary";
       colorNameText.textContent = "Color: Idle";
       colorPreview.style.backgroundColor = "#000000";
     }
 
     // --- Event Listeners ---
+    const onConnect = async (device) => {
+      if (hidDevice) {
+        return;
+      }
+      hidDevice = device;
+      if (!hidDevice.opened) {
+        await hidDevice.open();
+      }
+
+      log(`Connected to: ${hidDevice.productName} (Vendor: 0x${hidDevice.vendorId.toString(16)}, Product: 0x${hidDevice.productId.toString(16)})`);
+      updateUiState();
+
+      for (let i = 0; i < 3; i++) {
+        await sendStateReport({ r: 0, g: 100, b: 255 });
+        await new Promise(r => setTimeout(r, 30));
+      }
+      log("Initial handshake completed successfully!");
+    };
+
     connectBtn.addEventListener("click", async () => {
       try {
         log("Requesting WebHID device (Vendor: 0x054C, Product: 0x0CE6)...");
@@ -1191,20 +1027,7 @@ const audioWorkletCode = `
           log("No device selected.");
           return;
         }
-
-        hidDevice = devices[0];
-        if (!hidDevice.opened) {
-          await hidDevice.open();
-        }
-
-        log(`Connected to: ${hidDevice.productName} (Vendor: 0x${hidDevice.vendorId.toString(16)}, Product: 0x${hidDevice.productId.toString(16)})`);
-        updateUiState();
-
-        for (let i = 0; i < 3; i++) {
-          await sendStateReport({ r: 0, g: 100, b: 255 });
-          await new Promise(r => setTimeout(r, 30));
-        }
-        log("Initial handshake completed successfully!");
+        onConnect(devices[0]);
       } catch (err) {
         log(`Connection failed: ${err.message}`);
       }
@@ -1220,6 +1043,20 @@ const audioWorkletCode = `
         updateUiState();
       }
     });
+
+    async function connectToDualSense() {
+      let devices = await navigator.hid.getDevices();
+      devices = devices.filter((d) => d.vendorId === 0x054C && d.productId === 0x0CE6);
+      if (devices.length === 0) {
+        return;
+      }
+      if (!hidDevice) {
+        onConnect(devices[0]);
+      }
+    }
+    connectToDualSense();
+
+    navigator.hid.addEventListener('connect', connectToDualSense);
 
     navigator.hid.addEventListener('disconnect', (e) => {
       if (e.device === hidDevice) {
@@ -1237,62 +1074,68 @@ const audioWorkletCode = `
       }
     });
 
-    toggleHeartbeatBtn.addEventListener("click", () => {
-      if (heartbeatTimer) {
-        stopHeartbeat();
+    toggleSoundBtn.addEventListener("click", () => {
+      isSoundEnabled = !isSoundEnabled;
+      if (isSoundEnabled) {
+        currentVolume = parseInt(volumeSlider.value, 10);
       } else {
-        startHeartbeat();
+        currentVolume = 0;
       }
+      const volume = currentVolume;
+      const haptics = currentHaptics;
+      const target = audioTargetSelect.value;
+      sendStateReport({ volume, haptics, target });
+      toggleSoundBtn.textContent = isSoundEnabled ? "🔊 Sound on" : "🔇 Sound muted";
+      toggleSoundBtn.className = isSoundEnabled ? "btn btn-haptic" : "btn btn-secondary";
+      log(`Sound ${isSoundEnabled ? 'on' : 'off'}`);
     });
 
     toggleHapticBtn.addEventListener("click", () => {
       isHapticsEnabled = !isHapticsEnabled;
-      toggleHapticBtn.textContent = isHapticsEnabled ? "Disable HD Haptics Waveform" : "Enable HD Haptics Waveform";
+      toggleHapticBtn.textContent = isHapticsEnabled ? "🌶️ Haptics on" : "🧊️ Haptics muted";
       toggleHapticBtn.className = isHapticsEnabled ? "btn btn-haptic" : "btn btn-secondary";
-      metricHapticStatus.textContent = isHapticsEnabled ? `${hapticFreqSlider.value} Hz HD Wave` : "Inactive";
-      metricHapticStatus.style.color = isHapticsEnabled ? "var(--haptic)" : "var(--text-sub)";
-      log(`[HD Haptics] Waveform generator ${isHapticsEnabled ? 'ENABLED' : 'DISABLED'}`);
-    });
-
-    hapticFreqSlider.addEventListener("input", (e) => {
-      hapticFreqVal.textContent = e.target.value;
-      if (isHapticsEnabled) metricHapticStatus.textContent = `${e.target.value} Hz HD Wave`;
+      log(`Haptics ${isHapticsEnabled ? 'on' : 'off'}`);
     });
 
     hapticAmpSlider.addEventListener("input", (e) => {
+      if (!isHapticsEnabled) {
+        isHapticsEnabled = true;
+        toggleHapticBtn.textContent = "🌶️ Haptics on";
+        toggleHapticBtn.className = "btn btn-haptic";
+      }
       hapticAmpVal.textContent = e.target.value;
-    });
-
-    freqSlider.addEventListener("input", (e) => {
-      freqVal.textContent = e.target.value;
-      updateParams();
-    });
-
-    ampSlider.addEventListener("input", (e) => {
-      ampVal.textContent = e.target.value;
-      updateParams();
-    });
-
-    audioTargetSelect.addEventListener("change", async (e) => {
-      const tgt = e.target.value;
-      const vol = parseInt(volumeSlider.value, 10);
-      log(`Audio target switched to: ${tgt.toUpperCase()}`);
       if (hidDevice && hidDevice.opened) {
-        await sendStateReport({ volume: vol, target: tgt });
+        const volume = currentVolume;
+        const haptics = currentHaptics;
+        const target = audioTargetSelect.value;
+        sendStateReport({ volume, haptics, target });
       }
     });
 
-    clockSourceSelect.addEventListener("change", () => {
-      if (isAudioStreaming) {
-        stopAudioStream();
-        startAudioStream();
+    audioTargetSelect.addEventListener("change", (e) => {
+      const volume = currentVolume;
+      const haptics = currentHaptics;
+      const target = e.target.value;
+      log(`Audio target switched to: ${tgt.toUpperCase()}`);
+      if (hidDevice && hidDevice.opened && isSoundEnabled) {
+        currentVolume = vol;
+        sendStateReport({ volume, haptics, target });
       }
     });
 
     volumeSlider.addEventListener("input", (e) => {
+      if (!isSoundEnabled) {
+        isSoundEnabled = true;
+        toggleSoundBtn.textContent = "🔊 Sound on";
+        toggleSoundBtn.className = "btn btn-haptic";
+      }
       volumeVal.textContent = e.target.value;
-      if (hidDevice && hidDevice.opened && !isAudioStreaming) {
-        sendStateReport({ volume: parseInt(e.target.value, 10), target: audioTargetSelect.value });
+      currentVolume = parseInt(e.target.value, 10);
+      if (hidDevice && hidDevice.opened) {
+        const volume = currentVolume;
+        const haptics = currentHaptics;
+        const target = audioTargetSelect.value;
+        sendStateReport({ volume, haptics, target });
       }
     });
 
