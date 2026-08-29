@@ -455,8 +455,8 @@
             this.samplesAccumulated++;
 
             if (this.samplesAccumulated === 1024) {
-              const frames = 1024 * 2;
-              const pcm = new Float32Array(frames);
+              const frames = 1024;
+              const pcm = new Float32Array(frames * 2);
               for (let s = 0; s < frames; s++) {
                 pcm[s * 2] = this.bufferL[s];
                 pcm[s * 2 + 1] = this.bufferR[s];
@@ -764,7 +764,7 @@
             if (Math.abs(rVal) > Math.abs(peakRight)) peakRight = rVal;
           }
 
-          const scale = 4.0;
+          const scale = 8 * (currentHaptics / 100);
           peakLeft *= scale;
           peakRight *= scale;
 
@@ -931,6 +931,11 @@
             processAndSendPcm(e.data.pcm, e.data.frames);
           }
         };
+
+        const dummyGain = audioContext.createGain();
+        dummyGain.gain.value = 0.0;
+        workletNode.connect(dummyGain);
+        dummyGain.connect(audioContext.destination);
 
         log(`[Audio & Haptics] AudioWorklet running on hardware DAC clock!`);
       } catch (err) {
@@ -1104,6 +1109,7 @@
         toggleHapticBtn.className = "btn btn-haptic";
       }
       hapticAmpVal.textContent = e.target.value;
+      currentHaptics = parseInt(e.target.value, 10);
       if (hidDevice && hidDevice.opened) {
         const volume = currentVolume;
         const haptics = currentHaptics;
@@ -1116,9 +1122,8 @@
       const volume = currentVolume;
       const haptics = currentHaptics;
       const target = e.target.value;
-      log(`Audio target switched to: ${tgt.toUpperCase()}`);
+      log(`Audio target switched to: ${target.toUpperCase()}`);
       if (hidDevice && hidDevice.opened && isSoundEnabled) {
-        currentVolume = vol;
         sendStateReport({ volume, haptics, target });
       }
     });
