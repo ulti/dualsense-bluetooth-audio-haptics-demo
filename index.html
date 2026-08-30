@@ -1025,7 +1025,8 @@ function stopHeartbeat() {
 
 function onHeadphonesPlugged(plugged) {
   log(`Headphones: ${plugged ? 'PLUGGED' : 'UNPLUGGED'}`);
-  controls.currentTarget = plugged ? 'headset' : 'speaker';
+  const target = plugged ? 'headset' : 'speaker';
+  controls.currentTarget = target;
   audioTargetSelect.value = target;
   sendStateReport();
 }
