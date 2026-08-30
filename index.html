@@ -305,11 +305,11 @@
       </div>
 
       <div class="row" style="margin-bottom: 15px;">
-        <button id="toggle-audio-btn" class="btn btn-success" disabled>▶ Start MP3</button>
+        <button id="toggle-audio-btn" class="btn btn-success" disabled>▶ Start audio</button>
 
         <div class="control-group">
-          <span class="control-label">Load Custom MP3</span>
-          <input type="file" id="mp3-file-input" accept="audio/mp3, audio/mpeg" />
+          <span class="control-label">Load custom audio</span>
+          <input type="file" id="audio-file-input" accept="audio/mp3, audio/mpeg, audio/flac" />
         </div>
       </div>
 
@@ -317,16 +317,16 @@
         <button id="toggle-sound-btn" class="btn btn-haptic">🔊 Sound on</button>
 
         <div class="control-group">
+          <span class="control-label">Volume: <span id="volume-val">100</span>%</span>
+          <input type="range" id="volume-slider" min="0" max="100" value="100">
+        </div>
+
+        <div class="control-group">
           <span class="control-label">Output select</span>
           <select id="audio-target-select">
             <option value="speaker" selected>Speaker</option>
             <option value="headset">Headset</option>
           </select>
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">Volume: <span id="volume-val">100</span>%</span>
-          <input type="range" id="volume-slider" min="0" max="100" value="100">
         </div>
       </div>
 
@@ -341,15 +341,19 @@
 
       <div class="metrics-grid">
         <div class="metric-box">
-          <div class="metric-label">Audio Reports</div>
+          <div class="metric-label">Input reports</div>
+          <div class="metric-value" id="metric-inputs-received">0</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Audio reports</div>
           <div class="metric-value" id="metric-audio-sent">0</div>
         </div>
         <div class="metric-box">
-          <div class="metric-label">State Reports</div>
+          <div class="metric-label">State reports</div>
           <div class="metric-value" id="metric-state-sent">0</div>
         </div>
         <div class="metric-box">
-          <div class="metric-label">Average Interval</div>
+          <div class="metric-label">Audio report interval</div>
           <div class="metric-value" id="metric-interval">0.0 ms</div>
         </div>
       </div>
@@ -367,49 +371,6 @@
 
   <script type="module">
 import { createEncoder } from 'https://cdn.jsdelivr.net/npm/libopus-wasm/+esm';
-
-// --- Sony DualSense CRC32 Implementation ---
-const CRC32_TABLE = new Uint32Array(256);
-for (let i = 0; i < 256; i++) {
-  let c = i;
-  for (let bit = 0; bit < 8; bit++) {
-    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-  }
-  CRC32_TABLE[i] = c >>> 0;
-}
-
-function sonyCrc32(data) {
-  let crc = ~0xEADA2D49 >>> 0; // 0x1525D2B6
-  for (let i = 0; i < data.length; i++) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ data[i]) & 0xFF];
-  }
-  return (~crc) >>> 0;
-}
-
-function fillSonyCrc(report) {
-  const crc = sonyCrc32(report.subarray(0, report.length - 4));
-  const view = new DataView(report.buffer, report.byteOffset, report.byteLength);
-  view.setUint32(report.length - 4, crc, true); // Little-endian
-  return crc;
-}
-
-// --- Resample Stereo Linear (1024 frames -> 960 frames) ---
-function resampleStereoLinear(input, inputFrames, output, outputFrames) {
-  const step = inputFrames / outputFrames; // 1024 / 960 = 1.06666667
-  for (let outputFrame = 0; outputFrame < outputFrames; outputFrame++) {
-    const sourcePosition = outputFrame * step;
-    const sourceFrame = Math.floor(sourcePosition);
-    const fraction = sourcePosition - sourceFrame;
-    const nextFrame = Math.min(sourceFrame + 1, inputFrames - 1);
-
-    const sourceOffset = sourceFrame * 2;
-    const nextOffset = nextFrame * 2;
-    const outputOffset = outputFrame * 2;
-
-    output[outputOffset] = input[sourceOffset] + (input[nextOffset] - input[sourceOffset]) * fraction;
-    output[outputOffset + 1] = input[sourceOffset + 1] + (input[nextOffset + 1] - input[sourceOffset + 1]) * fraction;
-  }
-}
 
 // --- AudioWorklet Processor Source ---
 const audioWorkletCode = `
@@ -485,7 +446,7 @@ const STATE_REPORT_LENGTH = 142;
 const STATE_REPORT_ID = 0x32;
 const AUDIO_REPORT_ID = 0x39;
 
-const DEFAULT_MP3 = 'Not Footprints ehhhh (take 006) S80.mp3';
+const DEFAULT_AUDIO_FILE = 'Not Footprints ehhhh (take 006) S80.mp3';
 const HEARTBEAT_COLORS = [
   { name: "Vivid Red", hex: "#FF0000", r: 255, g: 0, b: 0 },
   { name: "Neon Green", hex: "#00FF00", r: 0, g: 255, b: 0 },
@@ -503,8 +464,8 @@ let workletNode = null;
 let isWorkletModuleLoaded = false;
 let hidDevice = null;
 
-// MP3 audio data
-let mp3Data = null;
+// Decoded audio data
+let audioData = null;
 
 // Heartbeat LED
 let heartbeatTimer = null;
@@ -517,21 +478,26 @@ let controls = {
   isHapticsEnabled: true,
   currentVolume: 100,
   currentHaptics: 100,
+  currentTarget: 'speaker',
 };
 
 // Protocol state (per-device)
 let protocol = {
   sequenceCounter: 0,
   packetCounter: 0,
-}
+};
 
 // Metrics (per-device)
 let metrics = {
   lastSendTimestamp: 0,
   intervalHistory: [],
+  inputsReceived: 0,
   audioReportsSent: 0,
   stateReportsSent: 0,
 };
+
+// Device input state (per-device)
+let inputState = null;
 
 const fullReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
 const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
@@ -550,6 +516,7 @@ const toggleSoundBtn = document.getElementById("toggle-sound-btn");
 const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
 const hapticAmpSlider = document.getElementById("haptic-amp-slider");
 const hapticAmpVal = document.getElementById("haptic-amp-val");
+const metricInputsReceived = document.getElementById("metric-inputs-received");
 const metricAudioSent = document.getElementById("metric-audio-sent");
 const metricStateSent = document.getElementById("metric-state-sent");
 const metricInterval = document.getElementById("metric-interval");
@@ -557,7 +524,7 @@ const colorPreview = document.getElementById("current-color-preview");
 const colorNameText = document.getElementById("color-name-text");
 const consoleLog = document.getElementById("console-log");
 const clearLogBtn = document.getElementById("clear-log-btn");
-const mp3FileInput = document.getElementById("mp3-file-input");
+const audioFileInput = document.getElementById("audio-file-input");
 
 function log(msg) {
   consoleLog.value += `${msg}\n`;
@@ -565,6 +532,49 @@ function log(msg) {
 }
 
 function hex16(v) { return ('0000' + v.toString(16)).substr(-4); }
+
+// --- Sony DualSense CRC32 Implementation ---
+const CRC32_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let bit = 0; bit < 8; bit++) {
+    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  CRC32_TABLE[i] = c >>> 0;
+}
+
+function sonyCrc32(data) {
+  let crc = ~0xEADA2D49 >>> 0; // 0x1525D2B6
+  for (let i = 0; i < data.length; i++) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ data[i]) & 0xFF];
+  }
+  return (~crc) >>> 0;
+}
+
+function fillSonyCrc(report) {
+  const crc = sonyCrc32(report.subarray(0, report.length - 4));
+  const view = new DataView(report.buffer, report.byteOffset, report.byteLength);
+  view.setUint32(report.length - 4, crc, true); // Little-endian
+  return crc;
+}
+
+// --- Resample Stereo Linear (1024 frames -> 960 frames) ---
+function resampleStereoLinear(input, inputFrames, output, outputFrames) {
+  const step = inputFrames / outputFrames; // 1024 / 960 = 1.06666667
+  for (let outputFrame = 0; outputFrame < outputFrames; outputFrame++) {
+    const sourcePosition = outputFrame * step;
+    const sourceFrame = Math.floor(sourcePosition);
+    const fraction = sourcePosition - sourceFrame;
+    const nextFrame = Math.min(sourceFrame + 1, inputFrames - 1);
+
+    const sourceOffset = sourceFrame * 2;
+    const nextOffset = nextFrame * 2;
+    const outputOffset = outputFrame * 2;
+
+    output[outputOffset] = input[sourceOffset] + (input[nextOffset] - input[sourceOffset]) * fraction;
+    output[outputOffset + 1] = input[sourceOffset + 1] + (input[nextOffset + 1] - input[sourceOffset + 1]) * fraction;
+  }
+}
 
 // Extract interleaved channel data from the rendered AudioBuffer
 function createInterleaved(buffer) {
@@ -578,7 +588,7 @@ function createInterleaved(buffer) {
   return interleaved;
 }
 
-async function loadMp3FromBuffer(buffer) {
+async function loadAudioFromBuffer(buffer) {
   // Ensure an AudioContext exists for decoding
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
@@ -598,38 +608,38 @@ async function loadMp3FromBuffer(buffer) {
   source.connect(offlineCtx.destination);
   source.start(0);
 
-  mp3Data = await offlineCtx.startRendering();
-  if (mp3Data && workletNode) {
-    const pcm = createInterleaved(mp3Data);
+  audioData = await offlineCtx.startRendering();
+  if (audioData && workletNode) {
+    const pcm = createInterleaved(audioData);
     workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
   }
 
-  toggleAudioBtn.disabled = !encoder || !mp3Data;
+  toggleAudioBtn.disabled = !encoder || !audioData;
 }
 
-async function loadMp3(file) {
-  log(`[Audio] Loading MP3 file: ${file.name}...`);
+async function loadAudio(file) {
+  log(`[Audio] Loading audio file: ${file.name}...`);
   try {
     const arrayBuffer = await file.arrayBuffer();
-    loadMp3FromBuffer(arrayBuffer);
-    log('[Audio] MP3 decoded & resampled successfully!');
+    loadAudioFromBuffer(arrayBuffer);
+    log('[Audio] Audio decoded & resampled successfully!');
   } catch (err) {
-    log(`[Audio Error] Failed to decode MP3: ${err.message}`);
+    log(`[Audio Error] Failed to decode audio: ${err.message}`);
   }
 }
 
-function loadDefaultMp3() {
-  log(`[Audio] Loading MP3 file: ${DEFAULT_MP3}`);
-  fetch(DEFAULT_MP3).then(async (response) => {
+function loadDefaultAudio() {
+  log(`[Audio] Loading audio file: ${DEFAULT_AUDIO_FILE}`);
+  fetch(DEFAULT_AUDIO_FILE).then(async (response) => {
     if (!response.ok) {
-      log(`[Audio Error] Failed to load ${DEFAULT_MP3}`);
+      log(`[Audio Error] Failed to load ${DEFAULT_AUDIO_FILE}`);
       return;
     }
     try {
       const audioBuffer = await response.arrayBuffer();
-      loadMp3FromBuffer(audioBuffer);
+      loadAudioFromBuffer(audioBuffer);
     } catch (err) {
-      log(`[Audio Error] Failed to decode MP3: ${err.message}`);
+      log(`[Audio Error] Failed to decode audio: ${err.message}`);
     }
   });
 }
@@ -664,7 +674,7 @@ function updateUiState() {
     statusText.textContent = `Connected: ${hidDevice.productName || 'DualSense'}`;
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
-    toggleAudioBtn.disabled = !encoder || !mp3Data;
+    toggleAudioBtn.disabled = !encoder || !audioData;
     startHeartbeat();
   } else {
     connectionStatus.className = "status-badge";
@@ -730,9 +740,13 @@ function buildStateReport({ r = 0, g = 100, b = 255, volume = 100, target = 'spe
   return report;
 }
 
-async function sendStateReport(options = {}) {
+async function sendStateReport() {
   if (!hidDevice || !hidDevice.opened) return;
-  const report = buildStateReport(options);
+  const {r, g, b} = HEARTBEAT_COLORS[currentColorIndex];
+  const volume = controls.currentVolume;
+  const haptics = controls.currentHaptics;
+  const target = controls.currentTarget;
+  const report = buildStateReport({r, g, b, volume, haptics, target});
   await hidDevice.sendReport(report[0], report.subarray(1));
 
   metrics.stateReportsSent++;
@@ -747,10 +761,10 @@ async function sendStateReport(options = {}) {
 function fillHapticBlocks(report, pcmFrame) {
   if (!controls.isHapticsEnabled || !pcmFrame) {
     // Silent neutral haptic blocks
-    report[10] = 0xD2;
+    report[10] = 0xD0;
     report[11] = 64;
     report.fill(0, 12, 74);
-    report[74] = 0xD2;
+    report[74] = 0xD0;
     report[75] = 64;
     report.fill(0, 76, 138);
     return;
@@ -843,7 +857,6 @@ async function processAndSendPcm(inputPcm, inputFrames) {
   if (!controls.isAudioStreaming || !hidDevice || !hidDevice.opened) return;
 
   const writeStart = performance.now();
-  const currentTarget = audioTargetSelect.value;
 
   try {
     let pcmForOpus;
@@ -861,7 +874,7 @@ async function processAndSendPcm(inputPcm, inputFrames) {
     const encA = encoder.encodeFloat(frameA);
     const encB = encoder.encodeFloat(frameB);
 
-    const report = buildAudioReport(encA, encB, pcmForOpus, currentTarget, 64);
+    const report = buildAudioReport(encA, encB, pcmForOpus, controls.currentTarget, 64);
     await hidDevice.sendReport(report[0], report.subarray(1));
 
     metrics.audioReportsSent++;
@@ -873,10 +886,10 @@ async function processAndSendPcm(inputPcm, inputFrames) {
     if (metrics.lastSendTimestamp > 0) {
       const delta = writeStart - metrics.lastSendTimestamp;
       metrics.intervalHistory.push(delta);
-      if (metrics.intervalHistory.length > 20) metrics.intervalHistory.shift();
+      if (metrics.intervalHistory.length > 200) metrics.intervalHistory.shift();
 
       const avgInterval = metrics.intervalHistory.reduce((a, b) => a + b, 0) / metrics.intervalHistory.length;
-      metricInterval.textContent = `${avgInterval.toFixed(1)} ms`;
+      metricInterval.textContent = `${avgInterval.toFixed(3)} ms`;
     }
     metrics.lastSendTimestamp = writeStart;
 
@@ -890,32 +903,27 @@ async function processAndSendPcm(inputPcm, inputFrames) {
 
 // --- Audio & Haptic Streaming Controls ---
 async function startAudioStream() {
-  if (controls.isAudioStreaming || !hidDevice || !encoder || !mp3Data) return;
+  if (controls.isAudioStreaming || !hidDevice || !encoder || !audioData) return;
 
   controls.isAudioStreaming = true;
-  toggleAudioBtn.textContent = "⏹ Stop MP3";
+  toggleAudioBtn.textContent = "⏹ Stop audio";
   toggleAudioBtn.className = "btn btn-danger pulse";
 
-  const target = audioTargetSelect.value;
-  const volume = controls.currentVolume;
-  const haptics = controls.currentHaptics;
-
-  log(`[Audio & Haptics] Initializing stream (Target: ${target}, Vol: ${volume}, Sound: ${controls.isSoundEnabled ? 'ON' : 'OFF'}, Haptics: ${controls.isHapticsEnabled ? 'ON' : 'OFF'})...`);
+  log(`[Audio & Haptics] Initializing stream (Target: ${controls.currentTarget}, Vol: ${controls.currentVolume}, Sound: ${controls.isSoundEnabled ? 'ON' : 'OFF'}, Haptics: ${controls.isHapticsEnabled ? 'ON' : 'OFF'})...`);
 
   for (let i = 0; i < 8; i++) {
     if (!controls.isAudioStreaming) return;
-    await sendStateReport({ r: 0, g: 255, b: 120, volume, haptics, target });
+    await sendStateReport();
     await new Promise(r => setTimeout(r, 20));
   }
 
   log("[Audio] Sending silent pre-roll to prime controller buffer...");
   const silenceFrame = new Float32Array(SAMPLES_PER_OPUS_PACKET);
-  const encodedSilenceA = encoder.encodeFloat(silenceFrame);
-  const encodedSilenceB = encoder.encodeFloat(silenceFrame);
+  const encodedSilence = encoder.encodeFloat(silenceFrame);
 
   for (let i = 0; i < 8; i++) {
     if (!controls.isAudioStreaming) break;
-    const report = buildAudioReport(encodedSilenceA, encodedSilenceB, [], target, 64);
+    const report = buildAudioReport(encodedSilence, encodedSilence, [], controls.currentTarget, 64);
     await hidDevice.sendReport(report[0], report.subarray(1));
     await new Promise(r => setTimeout(r, 20));
   }
@@ -941,7 +949,7 @@ async function startAudioStream() {
 
     workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {});
 
-    const pcm = createInterleaved(mp3Data);
+    const pcm = createInterleaved(audioData);
     workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
 
     workletNode.port.onmessage = (e) => {
@@ -974,7 +982,7 @@ function stopAudioStream() {
     audioContext.suspend();
   }
 
-  toggleAudioBtn.textContent = "▶ Start MP3";
+  toggleAudioBtn.textContent = "▶ Start audio";
   toggleAudioBtn.className = "btn btn-success";
   log(`[Audio & Haptics] Stream stopped. Audio reports sent: ${metrics.audioReportsSent}`);
 }
@@ -997,12 +1005,8 @@ function startHeartbeat() {
     colorPreview.style.backgroundColor = color.hex;
     colorNameText.textContent = `LED color: ${color.name}`;
 
-    const volume = controls.currentVolume;
-    const haptics = controls.currentHaptics;
-    const target = audioTargetSelect.value;
-
     try {
-      await sendStateReport({ r: color.r, g: color.g, b: color.b, volume, haptics, target });
+      await sendStateReport();
     } catch (e) {}
   };
 
@@ -1017,6 +1021,93 @@ function stopHeartbeat() {
   }
   colorNameText.textContent = "LED color: Idle";
   colorPreview.style.backgroundColor = "#000000";
+}
+
+function onHeadphonesPlugged(plugged) {
+  log(`Headphones: ${plugged ? 'PLUGGED' : 'UNPLUGGED'}`);
+  controls.currentTarget = plugged ? 'headset' : 'speaker';
+  audioTargetSelect.value = target;
+  sendStateReport();
+}
+
+function onUsbPowerPlugged(plugged) {
+  log(`USB power: ${plugged ? 'PLUGGED' : 'UNPLUGGED'}`);
+}
+
+function onInputReport(reportId, data) {
+  if (reportId === 0x31) {
+    const byte0 = data.getUint8(0);
+    const hasHid = (byte0 >> 0) & 0x01;
+    const hasMic = (byte0 >> 1) & 0x01;
+    const seqNo = (byte0 >> 4) & 0x0F;
+    const leftStickX = data.getUint8(1);
+    const leftStickY = data.getUint8(2);
+    const rightStickX = data.getUint8(3);
+    const rightStickY = data.getUint8(4);
+    const triggerLeft = data.getUint8(5);
+    const triggerRight = data.getUint8(6);
+
+    const byte8 = data.getUint8(8);
+    const dpad = (byte8 >> 0) & 0x0F;
+    const buttonSquare = (byte8 >> 4) & 0x01;
+    const buttonCross = (byte8 >> 5) & 0x01;
+    const buttonCircle = (byte8 >> 6) & 0x01;
+    const buttonTriangle = (byte8 >> 7) & 0x01;
+
+    const byte9 = data.getUint8(9);
+    const buttonL1 = (byte9 >> 0) & 0x01;
+    const buttonR1 = (byte9 >> 1) & 0x01;
+    const buttonL2 = (byte9 >> 2) & 0x01;
+    const buttonR2 = (byte9 >> 3) & 0x01;
+    const buttonCreate = (byte9 >> 4) & 0x01;
+    const buttonOptions = (byte9 >> 5) & 0x01;
+    const buttonL3 = (byte9 >> 6) & 0x01;
+    const buttonR3 = (byte9 >> 7) & 0x01;
+
+    const byte10 = data.getUint8(10);
+    const buttonHome = (byte10 >> 0) & 0x01;
+    const buttonPad = (byte10 >> 1) & 0x01;
+    const buttonMute = (byte10 >> 2) & 0x01;
+    const buttonLeftFunction = (byte10 >> 4) & 0x01;
+    const buttonRightFunction = (byte10 >> 5) & 0x01;
+    const buttonLeftPaddle = (byte10 >> 6) & 0x01;
+    const buttonRightPaddle = (byte10 >> 7) & 0x01;
+
+    const byte53 = data.getUint8(53);
+    const powerPercent = (byte53 >> 0) & 0x0F;
+    const powerState = (byte53 >> 4) & 0x0F;
+
+    const byte54 = data.getUint8(54);
+    const pluggedHeadphones = (byte54 >> 0) & 0x01;
+    const pluggedMic = (byte54 >> 1) & 0x01;
+    const micMuted = (byte54 >> 2) & 0x01;
+    const pluggedUsbData = (byte54 >> 3) & 0x01;
+    const pluggedUsbPower = (byte54 >> 3) & 0x01;
+    const usbPowerOnBt = (byte54 >> 4) & 0x01;
+
+    let batteryPercent = 0;
+    if (powerState == 2) {
+      batteryPercent = 100;
+    } else if (powerState == 0 || powerState == 1) {
+      batteryPercent = 10 * powerPercent;
+    }
+    const batteryFull = (powerState == 2);
+    const batteryAbnormalVoltage = (powerState == 10);
+    const batteryAbnormalTemperature = (powerState == 11);
+    const chargingError = (powerState == 15);
+
+    const oldState = inputState;
+    inputState = { hasHid, hasMic, seqNo, leftStickX, leftStickY, rightStickX, rightStickY, triggerLeft, triggerRight, dpad, buttonSquare, buttonCross, buttonCircle, buttonTriangle, buttonL1, buttonR1, buttonL2, buttonR2, buttonCreate, buttonOptions, buttonL3, buttonR3, buttonHome, buttonPad, buttonMute, buttonLeftFunction, buttonRightFunction, buttonLeftPaddle, buttonRightPaddle, powerPercent, powerState, pluggedHeadphones, pluggedMic, micMuted, pluggedUsbData, pluggedUsbPower, usbPowerOnBt, batteryPercent, batteryFull, batteryAbnormalVoltage, batteryAbnormalTemperature, chargingError };
+    if (!oldState || oldState.pluggedHeadphones != inputState.pluggedHeadphones) {
+      onHeadphonesPlugged(inputState.pluggedHeadphones);
+    }
+    if (!oldState || oldState.pluggedUsbPower != inputState.pluggedUsbPower) {
+      onUsbPowerPlugged(inputState.pluggedHeadphones);
+    }
+
+    ++metrics.inputsReceived;
+    metricInputsReceived.textContent = metrics.inputsReceived;
+  }
 }
 
 async function onConnect(device) {
@@ -1036,9 +1127,15 @@ async function onConnect(device) {
 
   log(`Connected: ${hidDevice.productName} [${vidpid}]`);
   updateUiState();
+  hidDevice.addEventListener('inputreport', (e) => {
+    if (e.device !== hidDevice) {
+      return;
+    }
+    onInputReport(e.reportId, e.data)
+  });
 
   for (let i = 0; i < 3; i++) {
-    await sendStateReport({ r: 0, g: 100, b: 255 });
+    await sendStateReport();
     await new Promise(r => setTimeout(r, 30));
   }
   log("Initial handshake completed successfully!");
@@ -1065,10 +1162,20 @@ async function connectToDualSense() {
 
 // --- Event Listeners ---
 
-mp3FileInput.addEventListener("change", async (e) => {
+navigator.hid.addEventListener('connect', connectToDualSense);
+
+navigator.hid.addEventListener('disconnect', (e) => {
+  if (e.device === hidDevice) {
+    log("Device physically disconnected.");
+    hidDevice = null;
+    updateUiState();
+  }
+});
+
+audioFileInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  loadMp3(file);
+  loadAudio(file);
 });
 
 connectBtn.addEventListener("click", async () => {
@@ -1108,16 +1215,6 @@ disconnectBtn.addEventListener("click", async () => {
   }
 });
 
-navigator.hid.addEventListener('connect', connectToDualSense);
-
-navigator.hid.addEventListener('disconnect', (e) => {
-  if (e.device === hidDevice) {
-    log("Device physically disconnected.");
-    hidDevice = null;
-    updateUiState();
-  }
-});
-
 toggleAudioBtn.addEventListener("click", () => {
   if (controls.isAudioStreaming) {
     stopAudioStream();
@@ -1133,13 +1230,12 @@ toggleSoundBtn.addEventListener("click", () => {
   } else {
     controls.currentVolume = 0;
   }
-  const volume = controls.currentVolume;
-  const haptics = controls.currentHaptics;
-  const target = audioTargetSelect.value;
-  sendStateReport({ volume, haptics, target });
   toggleSoundBtn.textContent = controls.isSoundEnabled ? "🔊 Sound on" : "🔇 Sound muted";
   toggleSoundBtn.className = controls.isSoundEnabled ? "btn btn-haptic" : "btn btn-secondary";
   log(`Sound ${controls.isSoundEnabled ? 'on' : 'off'}`);
+  if (hidDevice && hidDevice.opened) {
+    sendStateReport();
+  }
 });
 
 toggleHapticBtn.addEventListener("click", () => {
@@ -1158,20 +1254,15 @@ hapticAmpSlider.addEventListener("input", (e) => {
   hapticAmpVal.textContent = e.target.value;
   controls.currentHaptics = parseInt(e.target.value, 10);
   if (hidDevice && hidDevice.opened) {
-    const volume = controls.currentVolume;
-    const haptics = controls.currentHaptics;
-    const target = audioTargetSelect.value;
-    sendStateReport({ volume, haptics, target });
+    sendStateReport();
   }
 });
 
 audioTargetSelect.addEventListener("change", (e) => {
-  const volume = controls.currentVolume;
-  const haptics = controls.currentHaptics;
-  const target = e.target.value;
-  log(`Audio target switched to: ${target.toUpperCase()}`);
+  controls.currentTarget = e.target.value;
+  log(`Audio target switched to: ${controls.currentTarget.toUpperCase()}`);
   if (hidDevice && hidDevice.opened && controls.isSoundEnabled) {
-    sendStateReport({ volume, haptics, target });
+    sendStateReport();
   }
 });
 
@@ -1184,10 +1275,7 @@ volumeSlider.addEventListener("input", (e) => {
   volumeVal.textContent = e.target.value;
   controls.currentVolume = parseInt(e.target.value, 10);
   if (hidDevice && hidDevice.opened) {
-    const volume = controls.currentVolume;
-    const haptics = controls.currentHaptics;
-    const target = audioTargetSelect.value;
-    sendStateReport({ volume, haptics, target });
+    sendStateReport();
   }
 });
 
@@ -1195,8 +1283,13 @@ clearLogBtn.addEventListener("click", () => {
   consoleLog.value = "";
 });
 
+// Initialize Opus encoder
 initOpus();
-loadDefaultMp3();
+
+// Initialize default audio
+loadDefaultAudio();
+
+// Check for connected DualSenses
 connectToDualSense();
 
   </script>
