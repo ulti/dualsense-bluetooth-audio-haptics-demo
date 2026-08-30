@@ -766,7 +766,7 @@ function fillHapticBlocks(report, pcmFrame) {
   let isSilent = false;
   if (pcmFrame) {
     const energy = pcmFrame.reduce((a, b) => a + b * b, 0);
-    isSilent = energy < 0.00001;
+    isSilent = (controls.currentHaptics / 100) * energy < 0.00005;
   }
 
   if (!controls.isHapticsEnabled || !pcmFrame || isSilent) {
@@ -911,7 +911,7 @@ async function processAndSendPcm(inputPcm, inputFrames) {
     metrics.lastSendTimestamp = writeStart;
 
     if (metrics.audioReportsSent % 100 === 0) {
-      log(`[Audio & Haptics] Reports: ${metrics.audioReportsSent} | Interval: ${metricInterval.textContent} | Sound: ${controls.isSoundEnabled ? 'On' : 'Off'} | Haptics: ${controls.isHapticsEnabled ? 'On' : 'Off'}`);
+      log(`[Audio & Haptics] Reports: ${metrics.audioReportsSent} | Interval: ${metricInterval.textContent} | Sound: ${controls.isSoundEnabled ? 'On' : 'Off'} | Haptics: ${controls.isHapticsEnabled ? 'On' : 'Off'} | Battery: ${inputState ? inputState.batteryPercent : '?'}%`);
     }
   } catch (err) {
     log(`[Audio Error] Send failed: ${err.message}`);
