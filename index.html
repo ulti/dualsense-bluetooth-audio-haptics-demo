@@ -1103,7 +1103,7 @@ function onInputReport(reportId, data) {
       onHeadphonesPlugged(inputState.pluggedHeadphones);
     }
     if (!oldState || oldState.pluggedUsbPower != inputState.pluggedUsbPower) {
-      onUsbPowerPlugged(inputState.pluggedHeadphones);
+      onUsbPowerPlugged(inputState.pluggedUsbPower);
     }
 
     ++metrics.inputsReceived;
