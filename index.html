@@ -479,6 +479,7 @@ let controls = {
   currentVolume: 100,
   currentHaptics: 100,
   currentTarget: 'speaker',
+  currentEnergy: 0,
 };
 
 // Protocol state (per-device)
@@ -742,11 +743,14 @@ function buildStateReport({ r = 0, g = 100, b = 255, volume = 100, target = 'spe
 
 async function sendStateReport() {
   if (!hidDevice || !hidDevice.opened) return;
-  const {r, g, b} = HEARTBEAT_COLORS[currentColorIndex];
+  const color = HEARTBEAT_COLORS[Math.floor(currentColorIndex / 20)];
+  const intensity = Math.min(1.0, 0.01 * controls.currentEnergy);
+  const r = color.r * (controls.isAudioStreaming ? intensity : 1);
+  const g = color.g * (controls.isAudioStreaming ? intensity : 1);
+  const b = color.b * (controls.isAudioStreaming ? intensity : 1);
   const volume = controls.currentVolume;
-  const haptics = controls.currentHaptics;
   const target = controls.currentTarget;
-  const report = buildStateReport({r, g, b, volume, haptics, target});
+  const report = buildStateReport({r, g, b, volume, target});
   await hidDevice.sendReport(report[0], report.subarray(1));
 
   metrics.stateReportsSent++;
@@ -759,7 +763,13 @@ async function sendStateReport() {
 
 // --- Fill 128-Byte HD Haptics Waveform Blocks from Active PCM Chunk ---
 function fillHapticBlocks(report, pcmFrame) {
-  if (!controls.isHapticsEnabled || !pcmFrame) {
+  let isSilent = false;
+  if (pcmFrame) {
+    const energy = pcmFrame.reduce((a, b) => a + b * b, 0);
+    isSilent = energy < 0.00001;
+  }
+
+  if (!controls.isHapticsEnabled || !pcmFrame || isSilent) {
     // Silent neutral haptic blocks
     report[10] = 0xD0;
     report[11] = 64;
@@ -767,17 +777,18 @@ function fillHapticBlocks(report, pcmFrame) {
     report[74] = 0xD0;
     report[75] = 64;
     report.fill(0, 76, 138);
-    return;
+    return 0;
   }
 
   const totalInputFrames = pcmFrame.length / 2;
-  const windowSize = 960 / 62;
+  const windowSize = SAMPLES_PER_OPUS_PACKET / 62;
 
   // Helper to process a single haptic block (31 pairs)
   function populateBlock(blockHeaderOffset, dataHeaderOffset, startIndex) {
     report[blockHeaderOffset] = 0xD2;
     report[blockHeaderOffset + 1] = 64;
 
+    let energy = 0;
     for (let i = 0; i < 31; i++) {
       const pairIndex = startIndex + i;
       const windowStart = Math.floor(pairIndex * windowSize);
@@ -807,16 +818,22 @@ function fillHapticBlocks(report, pcmFrame) {
       if (Math.abs(peakLeft) > 1.0) peakLeft = 1.0;
       if (Math.abs(peakRight) > 1.0) peakRight = 1.0;
 
+      energy += peakLeft * peakLeft + peakRight * peakRight;
       report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
       report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
     }
+    return energy;
   }
 
+  let energy = 0;
+
   // Block 1: pairs 0 to 30
-  populateBlock(10, 12, 0);
+  energy += populateBlock(10, 12, 0);
 
   // Block 2: pairs 31 to 61
-  populateBlock(74, 76, 31);
+  energy += populateBlock(74, 76, 31);
+
+  return energy;
 }
 
 // Build 0x39 Full Audio + HD Haptics Report
@@ -840,7 +857,7 @@ function buildAudioReport(encodedA, encodedB, pcmFrame, target = 'speaker', buff
   report[9] = protocol.packetCounter;
 
   // Pass the active audio frame so haptics match the speaker output exactly
-  fillHapticBlocks(report, pcmFrame);
+  controls.currentEnergy += fillHapticBlocks(report, pcmFrame);
 
   const audioPacketType = (target === 'headset') ? 0x16 : 0x13;
   report[140] = audioPacketType | 0xC0;
@@ -862,7 +879,7 @@ async function processAndSendPcm(inputPcm, inputFrames) {
     let pcmForOpus;
 
     if (inputFrames === 1024) {
-      resampleStereoLinear(inputPcm, 1024, resampleOutputBuffer, 960);
+      resampleStereoLinear(inputPcm, 1024, resampleOutputBuffer, SAMPLES_PER_OPUS_PACKET);
       pcmForOpus = resampleOutputBuffer;
     } else {
       pcmForOpus = inputPcm;
@@ -919,11 +936,12 @@ async function startAudioStream() {
 
   log("[Audio] Sending silent pre-roll to prime controller buffer...");
   const silenceFrame = new Float32Array(SAMPLES_PER_OPUS_PACKET);
-  const encodedSilence = encoder.encodeFloat(silenceFrame);
+  const encodedSilenceA = encoder.encodeFloat(silenceFrame);
+  const encodedSilenceB = encoder.encodeFloat(silenceFrame);
 
   for (let i = 0; i < 8; i++) {
     if (!controls.isAudioStreaming) break;
-    const report = buildAudioReport(encodedSilence, encodedSilence, [], controls.currentTarget, 64);
+    const report = buildAudioReport(encodedSilenceA, encodedSilenceB, [], controls.currentTarget, 64);
     await hidDevice.sendReport(report[0], report.subarray(1));
     await new Promise(r => setTimeout(r, 20));
   }
@@ -972,6 +990,7 @@ async function startAudioStream() {
 function stopAudioStream() {
   if (!controls.isAudioStreaming) return;
   controls.isAudioStreaming = false;
+  controls.currentEnergy = 0;
 
   if (workletNode) {
     workletNode.port.postMessage({ action: 'stop' });
@@ -999,8 +1018,8 @@ function startHeartbeat() {
       return;
     }
 
-    const color = HEARTBEAT_COLORS[currentColorIndex];
-    currentColorIndex = (currentColorIndex + 1) % HEARTBEAT_COLORS.length;
+    const color = HEARTBEAT_COLORS[Math.floor(currentColorIndex / 20)];
+    currentColorIndex = (currentColorIndex + 1) % (HEARTBEAT_COLORS.length * 20);
 
     colorPreview.style.backgroundColor = color.hex;
     colorNameText.textContent = `LED color: ${color.name}`;
@@ -1008,10 +1027,11 @@ function startHeartbeat() {
     try {
       await sendStateReport();
     } catch (e) {}
+    controls.currentEnergy = 0;
   };
 
   cycle();
-  heartbeatTimer = setInterval(cycle, 1000);
+  heartbeatTimer = setInterval(cycle, 100);
 }
 
 function stopHeartbeat() {
