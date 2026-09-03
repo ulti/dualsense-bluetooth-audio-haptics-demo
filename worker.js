@@ -2,6 +2,7 @@ import { createEncoder } from "./libopus/index.js";
 
 const VENDOR_SONY = 0x054C;
 const PRODUCT_SONY_DUALSENSE = 0x0CE6;
+const INPUT_REPORT_ID = 0x31;
 const STATE_REPORT_ID = 0x32;
 const AUDIO_REPORT_ID = 0x39;
 const CHANNELS = 2;
@@ -10,6 +11,8 @@ const SAMPLES_PER_OPUS_PACKET = FRAMES_PER_OPUS_PACKET * CHANNELS;
 const FULL_REPORT_LENGTH = 547;
 const STATE_REPORT_LENGTH = 142;
 
+const audioReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
+const stateReportBuffer = new Uint8Array(STATE_REPORT_LENGTH);
 const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
 
 let encoder = null;
@@ -17,24 +20,22 @@ let audioPort = null;
 let hidDevice = null;
 let inputState = null;
 
+let stateReportReady = false;
 let packetCounter = 0;
 let sequenceCounter = 0;
 let controls = {};
-let color = null;
 
+let heartbeatInterval = 100;
+let stateReportInterval = 0;
+let lastStateReportTimestamp = null;
+let lastAudioReportTimestamp = null;
 let metrics = {
   inputsReceived: 0,
+  audioReportsSent: 0,
   stateReportsSent: 0,
-  currentEnergy: 0,
+  deltas: [],
+  energy: [],
 };
-
-function isDualSenseBluetooth(device) {
-  return device.vendorId === VENDOR_SONY &&
-      device.productId === PRODUCT_SONY_DUALSENSE &&
-      device.collections.length === 1 &&
-      device.collections[0].outputReports.some((r) => r.reportId == STATE_REPORT_ID) &&
-      device.collections[0].outputReports.some((r) => r.reportId == AUDIO_REPORT_ID);
-}
 
 function getNextSequenceByte() {
   const seqByte = (sequenceCounter << 4) & 0xFF;
@@ -133,21 +134,14 @@ function fillHapticBlocks(report, pcmFrame) {
       report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
       report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
     }
+    return energy;
   }
 
-  let energy = 0;
-
-  // Block 1: pairs 0 to 30
-  energy += populateBlock(10, 12, 0);
-
-  // Block 2: pairs 31 to 61
-  energy += populateBlock(74, 76, 31);
-
-  return energy;
+  return populateBlock(10, 12, 0) + populateBlock(74, 76, 31);
 }
 
-function buildAudioReport(encodedA, encodedB, pcmFrame, bufferLength) {
-  const report = new Uint8Array(FULL_REPORT_LENGTH);
+function buildAudioReport(encodedA, encodedB, pcmFrame) {
+  const report = audioReportBuffer;
 
   report[0] = AUDIO_REPORT_ID;
   report[1] = getNextSequenceByte();
@@ -155,16 +149,16 @@ function buildAudioReport(encodedA, encodedB, pcmFrame, bufferLength) {
   report[3] = 0x06;
   report[4] = 0x7E;
 
-  const bufByte = bufferLength & 0xFF;
-  report[5] = bufByte;
-  report[6] = bufByte;
-  report[7] = bufByte;
-  report[8] = bufByte;
+  report[5] = 64;
+  report[6] = 64;
+  report[7] = 64;
+  report[8] = 64;
 
   packetCounter = (packetCounter + 2) & 0xFF;
   report[9] = packetCounter;
 
-  metrics.currentEnergy += fillHapticBlocks(report, pcmFrame);
+  const frameEnergy = fillHapticBlocks(report, pcmFrame);
+  metrics.energy.push(frameEnergy);
 
   const audioPacketType = (controls.currentTarget === 'headset') ? 0x16 : 0x13;
   report[140] = audioPacketType | 0xC0;
@@ -178,8 +172,17 @@ function buildAudioReport(encodedA, encodedB, pcmFrame, bufferLength) {
 }
 
 function buildStateReport() {
-  const report = new Uint8Array(STATE_REPORT_LENGTH);
-  
+  const report = stateReportBuffer;
+
+  const intensity = Math.min(1.0, metrics.energy[metrics.energy.length - 1] / 10)
+  const cold = {r: 30, g: 0, b: 30};
+  const hot = {r: 30, g: 255, b: 30};
+  const color = {
+    r: Math.sqrt(0.5 * (hot.r * hot.r * intensity + cold.r * cold.r * (1 - intensity))),
+    g: Math.sqrt(0.5 * (hot.g * hot.g * intensity + cold.g * cold.g * (1 - intensity))),
+    b: Math.sqrt(0.5 * (hot.b * hot.b * intensity + cold.b * cold.b * (1 - intensity))),
+  };
+
   report[0] = 0x32;
   report[1] = getNextSequenceByte();
   report[2] = 0x90;
@@ -197,16 +200,19 @@ function buildStateReport() {
   report[state + 39] = 0x01;
   report[state + 41] = 0x02;
   report[state + 43] = 0x04;
-  report[state + 44] = controls.r & 0xFF;
-  report[state + 45] = controls.g & 0xFF;
-  report[state + 46] = controls.b & 0xFF;
+  report[state + 44] = Math.round(color.r) & 0xFF;
+  report[state + 45] = Math.round(color.g) & 0xFF;
+  report[state + 46] = Math.round(color.b) & 0xFF;
 
   fillSonyCrc(report);
-  return report;
+  stateReportReady = true;
+  lastStateReportTimestamp = Date.now();
 }
 
-function onInputReport(reportId, data) {
-  if (reportId === 0x31) {
+function onInputReport(event) {
+  const {reportId, data} = event;
+  if (reportId === INPUT_REPORT_ID) {
+    ++metrics.inputsReceived;
     const byte0 = data.getUint8(0);
     const hasHid = (byte0 >> 0) & 0x01;
     const hasMic = (byte0 >> 1) & 0x01;
@@ -267,22 +273,51 @@ function onInputReport(reportId, data) {
     const batteryAbnormalTemperature = (powerState == 11);
     const chargingError = (powerState == 15);
 
+    const dpadUp = (dpad == 0 || dpad == 1 || dpad == 7);
+    const dpadRight = (dpad == 1 || dpad == 2 || dpad == 3);
+    const dpadDown = (dpad == 3 || dpad == 4 || dpad == 5);
+    const dpadLeft = (dpad == 5 || dpad == 6 || dpad == 7);
+
+    const axes = { leftStickX, leftStickY, rightStickX, rightStickY, triggerLeft, triggerRight };
+    const buttons = { dpadUp, dpadRight, dpadDown, dpadLeft, buttonSquare, buttonCross, buttonCircle, buttonTriangle, buttonL1, buttonR1, buttonL2, buttonR2, buttonCreate, buttonOptions, buttonL3, buttonR3, buttonHome, buttonPad, buttonMute, buttonLeftFunction, buttonRightFunction, buttonLeftPaddle, buttonRightPaddle };
+    const power = { powerState, batteryPercent, batteryFull, batteryAbnormalVoltage, batteryAbnormalTemperature, chargingError, usbPowerOnBt };
+    const plugged = { pluggedHeadphones, pluggedMic, pluggedUsbData, pluggedUsbPower };
+    const mic = { hasMic, micMuted };
+
     const oldState = inputState;
-    inputState = { hasHid, hasMic, seqNo, leftStickX, leftStickY, rightStickX, rightStickY, triggerLeft, triggerRight, dpad, buttonSquare, buttonCross, buttonCircle, buttonTriangle, buttonL1, buttonR1, buttonL2, buttonR2, buttonCreate, buttonOptions, buttonL3, buttonR3, buttonHome, buttonPad, buttonMute, buttonLeftFunction, buttonRightFunction, buttonLeftPaddle, buttonRightPaddle, powerPercent, powerState, pluggedHeadphones, pluggedMic, micMuted, pluggedUsbData, pluggedUsbPower, usbPowerOnBt, batteryPercent, batteryFull, batteryAbnormalVoltage, batteryAbnormalTemperature, chargingError };
-    if (!oldState || oldState.pluggedHeadphones != pluggedHeadphones) {
+    const buttonsDown = [];
+    const buttonsUp = [];
+    const buttonsPressed = [];
+    for (const key of Object.keys(buttons)) {
+      const down = (!oldState || !oldState.buttons[key]) && buttons[key];
+      const up = oldState && oldState.buttons[key] && !buttons[key];
+      if (buttons[key]) {
+        buttonsPressed.push(key);
+      }
+      if (down) {
+        buttonsDown.push(key);
+        self.postMessage({ status: 'keydown', key });
+      } else if (up) {
+        buttonsUp.push(key);
+        self.postMessage({ status: 'keyup', key });
+      }
+    }
+
+    inputState = { hasHid, seqNo, axes, buttons, buttonsDown, buttonsUp, buttonsPressed, power, plugged, mic };
+    if (!oldState || oldState.plugged.pluggedHeadphones != pluggedHeadphones) {
       controls.currentTarget = pluggedHeadphones ? 'headset' : 'speaker';
       const plugged = pluggedHeadphones;
       self.postMessage({ status: 'headset', plugged });
     }
-
-    ++metrics.inputsReceived;
   }
 }
 
 // Unified message router
 self.onmessage = async (e) => {
   const { action } = e.data;
-  if (action === 'init') {
+
+  // init-opus - Called at startup. Initializes the Opus encoder.
+  if (action === 'init-opus') {
     const { config } = e.data;
     try {
       encoder = await createEncoder(config);
@@ -293,34 +328,43 @@ self.onmessage = async (e) => {
     return;
   }
 
-  if (action === 'initHid') {
-    let devices = await navigator.hid.getDevices();
-    devices = devices.filter(isDualSenseBluetooth);
-    
-    if (devices.length === 0) {
-      self.postMessage({ status: 'error', message: 'No permitted DualSense devices found in worker.' });
+  // init-hid - Called at various times to initiate a new device connection.
+  // The page ensures there is exactly one connected device to signal which
+  // device to use. Does nothing if there is not exactly one connected device.
+  //
+  // * Called at startup if there is a granted permission and the device is
+  //   already connected.
+  // * Called after worker initialization if there exactly one opened device.
+  // * Called after completing the requestDevice flow.
+  if (action === 'init-hid') {
+    const devices = await navigator.hid.getDevices();
+    if (devices.length !== 1) {
       return;
     }
-
-    hidDevice = devices.find(d => d.opened) || devices[0];
-    if (!hidDevice.opened) {
-      await hidDevice.open();
+    const device = devices[0];
+    if (!device.opened) {
+      await device.open();
     }
-    if (!hidDevice.opened) {
-      hidDevice = null;
-      self.postMessage({ status: 'error', message: 'Failed to open device.' });
-      return;
+    if (hidDevice) {
+      hidDevice.removeEventListener('inputreport', onInputReport);
     }
-
-    hidDevice.addEventListener('inputreport', (e) => onInputReport(e.reportId, e.data));
-
-    self.postMessage({ status: 'hid-ready' });
+    hidDevice = device;
+    hidDevice.addEventListener('inputreport', onInputReport);
     return;
   }
 
+  // init-audio-port - Called after initializing both the audio worklet and the
+  // worker to establish a message pipe between the two. Initializes control
+  // parameters from the current UI control state.
   if (action === 'init-audio-port') {
     controls = e.data.controls;
     audioPort = e.data.port;
+
+    let lastHeartbeat = null;
+
+    // Called with PCM audio data once the audio worklet has collected 1024 new
+    // samples. Resamples to 45kHz, encodes the Opus frames, generates haptic
+    // waveforms, builds the audio report and sends it to the device.
     audioPort.onmessage = async (event) => {
       if (!encoder || !hidDevice || !hidDevice.opened) return;
 
@@ -335,14 +379,35 @@ self.onmessage = async (e) => {
         const encodedA = encoder.encodeFloat(frameA);
         const encodedB = encoder.encodeFloat(frameB);
 
-        const report = buildAudioReport(encodedA, encodedB, resampleOutputBuffer, 64);
+        const report = buildAudioReport(encodedA, encodedB, resampleOutputBuffer);
 
+        // Send the audio report
+        const now = Date.now();
         await hidDevice.sendReport(report[0], report.slice(1));
+        if (lastAudioReportTimestamp) {
+          metrics.deltas.push(now - lastAudioReportTimestamp);
+        }
+        lastAudioReportTimestamp = now;
+        ++metrics.audioReportsSent;
+        if (!stateReportReady && now - lastStateReportTimestamp > stateReportInterval) {
+          buildStateReport();
+        }
 
-        // Optional: send lightweight timing/jitter telemetry back to main thread for UI
-        const now = performance.now();
-        self.postMessage({ status: 'metrics', timestamp: now, metrics });
-        metrics.currentEnergy = 0;
+        // Send the state report
+        if (stateReportReady) {
+          await hidDevice.sendReport(stateReportBuffer[0], stateReportBuffer.slice(1));
+          stateReportReady = false;
+          ++metrics.stateReportsSent;
+        }
+
+        // Report metrics back to the page
+        if (!lastHeartbeat || now - lastHeartbeat > heartbeatInterval) {
+          const message = `Reports I:${metrics.inputsReceived} A:${metrics.audioReportsSent} S:${metrics.stateReportsSent} | Volume: ${controls.currentVolume}% (${controls.currentTarget}) | Haptics: ${controls.currentHaptics}% | Battery: ${inputState.power.batteryPercent}%${inputState.power.powerState === 1 ? ' (charging)' : ''}${inputState.power.powerState === 2 ? ' (full)' : ''}`;
+          self.postMessage({ status: 'heartbeat', message, metrics });
+          lastHeartbeat = now;
+          metrics.deltas = [];
+          metrics.energy = [];
+        }
       } catch (err) {
         console.log(err);
       }
@@ -350,19 +415,14 @@ self.onmessage = async (e) => {
     return;
   }
 
-  if (action === 'sendStateReport') {
+  // send-state-report - Called after changing control parameters or LED colors.
+  // Sends a state report to the device.
+  if (action === 'send-state-report') {
     if (!hidDevice || !hidDevice.opened) {
       return;
     }
     controls = e.data.controls;
-    color = e.data.color;
-    try {
-      const report = buildStateReport();
-      await hidDevice.sendReport(report[0], report.slice(1));
-      ++metrics.stateReportsSent;
-    } catch (err) {
-      console.log(err);
-    }
+    buildStateReport();
     return;
   }
 };
