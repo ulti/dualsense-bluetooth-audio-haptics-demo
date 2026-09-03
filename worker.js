@@ -23,14 +23,7 @@ let inputState = null;
 let stateReportReady = false;
 let packetCounter = 0;
 let sequenceCounter = 0;
-let controls = {
-  playerLight1: 0,
-  playerLight2: 0,
-  playerLight3: 0,
-  playerLight4: 0,
-  playerLight5: 0,
-  playerLightFade: 1,  // player lights instantly change
-};
+let controls = {};
 
 let heartbeatInterval = 100;
 let stateReportInterval = 0;
@@ -98,7 +91,7 @@ function resampleStereoLinear(input, inputFrames, output, outputFrames) {
 
 // --- HD Haptics Block Generation ---
 function fillHapticBlocks(report, pcmFrame) {
-  if (!controls.isHapticsEnabled || !pcmFrame) {
+  if (!pcmFrame) {
     report[10] = 0xD0;
     report[11] = 64;
     report.fill(0, 12, 74);
@@ -112,7 +105,11 @@ function fillHapticBlocks(report, pcmFrame) {
   const windowSize = SAMPLES_PER_OPUS_PACKET / 62;
 
   function populateBlock(blockHeaderOffset, dataHeaderOffset, startIndex) {
-    report[blockHeaderOffset] = 0xD2;
+    if (controls.isHapticsEnabled) {
+      report[blockHeaderOffset] = 0xD2;
+    } else {
+      report[blockHeaderOffset] = 0xD0;
+    }
     report[blockHeaderOffset + 1] = 64;
 
     let energy = 0;
@@ -142,8 +139,13 @@ function fillHapticBlocks(report, pcmFrame) {
       if (Math.abs(peakRight) > 1.0) peakRight = 1.0;
 
       energy += peakLeft * peakLeft + peakRight * peakRight;
-      report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
-      report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
+      if (controls.isHapticsEnabled) {
+        report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
+        report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
+      } else {
+        report[dataHeaderOffset + i * 2] = 0x00;
+        report[dataHeaderOffset + i * 2 + 1] = 0x00;
+      }
     }
     return energy;
   }
@@ -190,11 +192,7 @@ function buildStateReport() {
   intensity = Math.sqrt(intensity * intensity);
   const cold = {r: 30, g: 0, b: 30};
   const hot = {r: 30, g: 255, b: 30};
-  let color = {
-    r: Math.sqrt(0.5 * (hot.r * hot.r * intensity + cold.r * cold.r * (1 - intensity))),
-    g: Math.sqrt(0.5 * (hot.g * hot.g * intensity + cold.g * cold.g * (1 - intensity))),
-    b: Math.sqrt(0.5 * (hot.b * hot.b * intensity + cold.b * cold.b * (1 - intensity))),
-  };
+  let color = {r: 0, g: 0, b: 0};
 
   let playerLight1 = 0;
   let playerLight2 = 0;
@@ -203,27 +201,34 @@ function buildStateReport() {
   let playerLight5 = 0;
   const playerLightFade = 0;
   let muteLight = 0;
-  if (intensity > 0.9) {
-    playerLight1 = 1;
-    playerLight2 = 0;
-    playerLight3 = 0;
-    playerLight4 = 0;
-    playerLight5 = 1;
-  } else if (intensity > 0.7) {
-    playerLight1 = 0;
-    playerLight2 = 1;
-    playerLight3 = 0;
-    playerLight4 = 1;
-    playerLight5 = 0;
-  } else if (intensity > 0.3) {
-    playerLight1 = 0;
-    playerLight2 = 0;
-    playerLight3 = 1;
-    playerLight4 = 0;
-    playerLight5 = 0;
-  }
-  if (intensity > 0.95) {
-    muteLight = 1;
+  if (controls.isLightsEnabled) {
+    color = {
+      r: Math.sqrt(0.5 * (hot.r * hot.r * intensity + cold.r * cold.r * (1 - intensity))),
+      g: Math.sqrt(0.5 * (hot.g * hot.g * intensity + cold.g * cold.g * (1 - intensity))),
+      b: Math.sqrt(0.5 * (hot.b * hot.b * intensity + cold.b * cold.b * (1 - intensity))),
+    };
+    if (intensity > 0.9) {
+      playerLight1 = 1;
+      playerLight2 = 0;
+      playerLight3 = 0;
+      playerLight4 = 0;
+      playerLight5 = 1;
+    } else if (intensity > 0.7) {
+      playerLight1 = 0;
+      playerLight2 = 1;
+      playerLight3 = 0;
+      playerLight4 = 1;
+      playerLight5 = 0;
+    } else if (intensity > 0.3) {
+      playerLight1 = 0;
+      playerLight2 = 0;
+      playerLight3 = 1;
+      playerLight4 = 0;
+      playerLight5 = 0;
+    }
+    if (intensity > 0.95) {
+      muteLight = 1;
+    }
   }
 
   report[0] = 0x32;
