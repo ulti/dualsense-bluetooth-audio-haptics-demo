@@ -484,7 +484,7 @@ async function initWorker() {
       log("Worker error:", message);
     } else if (status === 'heartbeat') {
       const { message } = e.data;
-      log(message, e.data.metrics.deltas);
+      //log(message);
       metrics = e.data.metrics;
       metrics.deltas.forEach((d) => intervalHistory.push(d));
       while (intervalHistory.length > 1000) intervalHistory.shift();
