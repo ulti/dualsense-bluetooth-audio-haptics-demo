@@ -24,15 +24,7 @@
       <div class="row" style="margin-bottom: 15px;">
         <button id="connect-btn" class="btn btn-primary">Connect DualSense</button>
         <button id="disconnect-btn" class="btn btn-danger" disabled>Disconnect</button>
-        <span id="encoder-status" style="font-size: 0.85rem; color: var(--text-sub);">Loading libopus-wasm...</span>
       </div>
-
-      <!--<div class="row">
-        <div class="color-preview-box" id="current-color-preview" style="background-color: #000000;" title="Current Target Color"></div>
-        <div style="display: flex; flex-direction: column; justify-content: center;">
-          <span style="font-size: 0.85rem; font-weight: 600;" id="color-name-text">Color: Idle</span>
-        </div>
-      </div>-->
     </div>
 
     <!-- Audio-Driven HD Waveform Haptics Section -->
@@ -76,7 +68,7 @@
         </div>
       </div>
 
-      <!--<div class="metrics-grid">
+      <div class="metrics-grid">
         <div class="metric-box">
           <div class="metric-label">Input reports</div>
           <div class="metric-value" id="metric-inputs-received">0</div>
@@ -89,20 +81,16 @@
           <div class="metric-label">State reports</div>
           <div class="metric-value" id="metric-state-sent">0</div>
         </div>
-        <div class="metric-box">
-          <div class="metric-label">Audio report interval</div>
-          <div class="metric-value" id="metric-interval">0.0 ms</div>
-        </div>
-      </div>-->
+      </div>
 
       <!-- Timing Jitter Visualizer -->
-      <!--<div class="chart-container">
+      <div class="chart-container">
         <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-sub); margin-bottom: 6px;">
           <span>AUDIO REPORT INTERVAL JITTER</span>
           <span id="jitter-stats">Min: 0ms | Max: 0ms</span>
         </div>
         <canvas id="jitter-canvas"></canvas>
-      </div>-->
+      </div>
     </div>
 
     <!-- Diagnostic Log Console -->
