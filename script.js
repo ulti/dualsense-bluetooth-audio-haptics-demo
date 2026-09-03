@@ -80,17 +80,17 @@ const AUDIO_REPORT_ID = 0x39;
 
 const DEFAULT_AUDIO_FILE = 'Not Footprints ehhhh (take 006) S80.mp3';
 
-let encoderReady = false;
 let audioContext = null;
-let workletNode = null;
-let worker = null;
-let isWorkletModuleLoaded = false;
 let hidDevice = null;
+let worker = null;
+let workerReady = false;
+let workletNode = null;
+let workletReady = false;
 
 // Decoded audio data
 let audioData = null;
 
-// UI controls (per-device)
+// UI controls
 let controls = {
   isAudioStreaming: false,
   isSoundEnabled: true,
@@ -98,20 +98,19 @@ let controls = {
   currentVolume: 100,
   currentHaptics: 100,
   currentTarget: 'speaker',
-  currentEnergy: 0,
 };
 
-// Protocol state (per-device)
-let protocol = {
-  sequenceCounter: 0,
-  packetCounter: 0,
-};
-
-// Metrics (per-device)
+// Metrics (sent from worker)
 let metrics = {
   inputsReceived: 0,
   audioReportsSent: 0,
   stateReportsSent: 0,
+  pluggedUsbPower: false,
+  pluggedHeadphones: false,
+  batteryPercent: 100,
+  batteryText: '100%',
+  deltas: [],
+  energy: [],
 };
 let intervalHistory = [];
 
@@ -123,6 +122,8 @@ const connectBtn = document.getElementById("connect-btn");
 const disconnectBtn = document.getElementById("disconnect-btn");
 const connectionStatus = document.getElementById("connection-status");
 const statusText = document.getElementById("status-text");
+const batteryStatus = document.getElementById("battery-status");
+const batteryStatusText = document.getElementById("battery-status-text");
 const toggleAudioBtn = document.getElementById("toggle-audio-btn");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeVal = document.getElementById("volume-val");
@@ -134,16 +135,11 @@ const hapticAmpVal = document.getElementById("haptic-amp-val");
 const metricInputsReceived = document.getElementById("metric-inputs-received");
 const metricAudioSent = document.getElementById("metric-audio-sent");
 const metricStateSent = document.getElementById("metric-state-sent");
-const consoleLog = document.getElementById("console-log");
-const clearLogBtn = document.getElementById("clear-log-btn");
 const audioFileInput = document.getElementById("audio-file-input");
 const jitterCanvas = document.getElementById("jitter-canvas");
 const jitterStats = document.getElementById("jitter-stats");
 
-function log(msg) {
-  consoleLog.value += `${msg}\n`;
-  consoleLog.scrollTop = consoleLog.scrollHeight;
-}
+const log = console.log;
 
 function hex16(v) { return ('0000' + v.toString(16)).substr(-4); }
 
@@ -210,7 +206,7 @@ async function loadAudioFromBuffer(buffer) {
     workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
   }
 
-  toggleAudioBtn.disabled = !encoderReady || !audioData;
+  toggleAudioBtn.disabled = !workerReady || !audioData;
 }
 
 async function loadAudio(file) {
@@ -245,17 +241,16 @@ function updateUiState() {
 
   if (isConnected) {
     connectionStatus.className = "status-badge connected";
-    statusText.textContent = `Connected: ${hidDevice.productName || 'DualSense'}`;
+    statusText.textContent = `Connected: ${hidDevice.productName}`;
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
-    toggleAudioBtn.disabled = !encoderReady || !audioData;
+    toggleAudioBtn.disabled = !workerReady || !audioData;
   } else {
     connectionStatus.className = "status-badge";
     statusText.textContent = "Disconnected";
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
     toggleAudioBtn.disabled = true;
-    if (controls.isAudioStreaming) stopAudioStream();
   }
 }
 
@@ -275,13 +270,13 @@ function openWorkerMessageChannel() {
 
 // --- Audio & Haptic Streaming Controls ---
 async function startAudioStream() {
-  if (controls.isAudioStreaming || !hidDevice || !encoderReady || !audioData) return;
+  if (controls.isAudioStreaming || !hidDevice || !workerReady || !audioData) return;
 
   controls.isAudioStreaming = true;
   toggleAudioBtn.textContent = "⏹ Stop audio";
   toggleAudioBtn.className = "btn btn-danger pulse";
 
-  log(`[Audio & Haptics] Initializing stream (Target: ${controls.currentTarget}, Vol: ${controls.currentVolume}, Sound: ${controls.isSoundEnabled ? 'ON' : 'OFF'}, Haptics: ${controls.isHapticsEnabled ? 'ON' : 'OFF'})...`);
+  log('[Audio & Haptics] Initializing stream');
 
   for (let i = 0; i < 8; i++) {
     if (!controls.isAudioStreaming) return;
@@ -294,17 +289,17 @@ async function startAudioStream() {
   try {
     if (!audioContext || audioContext.state === 'closed') {
       audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-      isWorkletModuleLoaded = false;
+      workletReady = false;
     }
     if (audioContext.state === 'suspended') {
       await audioContext.resume();
     }
 
-    if (!isWorkletModuleLoaded) {
+    if (!workletReady) {
       const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
       const workletUrl = URL.createObjectURL(blob);
       await audioContext.audioWorklet.addModule(workletUrl);
-      isWorkletModuleLoaded = true;
+      workletReady = true;
     }
 
     workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {});
@@ -321,7 +316,7 @@ async function startAudioStream() {
       openWorkerMessageChannel();
     }
 
-    log(`[Audio & Haptics] AudioWorklet running on hardware DAC clock!`);
+    log('[Audio & Haptics] AudioWorklet running');
   } catch (err) {
     log(`AudioWorklet initialization failed: ${err.message}`);
   }
@@ -330,7 +325,6 @@ async function startAudioStream() {
 function stopAudioStream() {
   if (!controls.isAudioStreaming) return;
   controls.isAudioStreaming = false;
-  controls.currentEnergy = 0;
 
   if (workletNode) {
     workletNode.port.postMessage({ action: 'stop' });
@@ -343,13 +337,25 @@ function stopAudioStream() {
 
   toggleAudioBtn.textContent = "▶ Start audio";
   toggleAudioBtn.className = "btn btn-success";
-  log(`[Audio & Haptics] Stream stopped. Audio reports sent: ${metrics.audioReportsSent}`);
+  log('[Audio & Haptics] Stream stopped');
 }
 
 function onHeadphonesPlugged(plugged) {
   const target = plugged ? 'headset' : 'speaker';
   controls.currentTarget = target;
   audioTargetSelect.value = target;
+}
+
+function onKeyDown(key) {
+  if (key === 'buttonCross') {
+    startAudioStream();
+  } else if (key == 'buttonCircle') {
+    stopAudioStream();
+  }
+}
+
+function onKeyUp(key) {
+
 }
 
 async function onConnect(device) {
@@ -477,24 +483,36 @@ async function initWorker() {
     const { status } = e.data;
     if (status === 'ready') {
       log("Opus encoder worker initialized successfully.");
-      encoderReady = true;
+      workerReady = true;
       updateUiState();
     } else if (status === 'error') {
       const { message } = e.data;
       log("Worker error:", message);
     } else if (status === 'heartbeat') {
       const { message } = e.data;
-      //log(message);
+      log(message);
       metrics = e.data.metrics;
       metrics.deltas.forEach((d) => intervalHistory.push(d));
-      while (intervalHistory.length > 1000) intervalHistory.shift();
+      while (intervalHistory.length > 500) intervalHistory.shift();
       metricInputsReceived.textContent = metrics.inputsReceived;
       metricStateSent.textContent = metrics.stateReportsSent;
       metricAudioSent.textContent = metrics.audioReportsSent;
+      batteryStatusText.textContent = `Battery: ${metrics.batteryText}`;
+      if (metrics.pluggedUsbPower || metrics.batteryPercent > 10) {
+        batteryStatus.className = "status-badge connected";
+      } else {
+        batteryStatus.className = "status-badge";
+      }
       drawJitterChart();
     } else if (status === 'headset') {
       const { plugged } = e.data;
       onHeadphonesPlugged(plugged);
+    } else if (status === 'keydown') {
+      const { key } = e.data;
+      onKeyDown(key);
+    } else if (status === 'keyup') {
+      const { key } = e.data;
+      onKeyUp(key);
     }
   };
 
@@ -624,10 +642,6 @@ volumeSlider.addEventListener("input", (e) => {
   if (hidDevice && hidDevice.opened) {
     sendStateReport();
   }
-});
-
-clearLogBtn.addEventListener("click", () => {
-  consoleLog.value = "";
 });
 
 initWorker();
