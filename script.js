@@ -95,6 +95,7 @@ let controls = {
   isAudioStreaming: false,
   isSoundEnabled: true,
   isHapticsEnabled: true,
+  isLightsEnabled: true,
   currentVolume: 100,
   currentHaptics: 100,
   currentTarget: 'speaker',
@@ -130,6 +131,7 @@ const volumeVal = document.getElementById("volume-val");
 const audioTargetSelect = document.getElementById("audio-target-select");
 const toggleSoundBtn = document.getElementById("toggle-sound-btn");
 const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
+const toggleLightsBtn = document.getElementById("toggle-lights-btn");
 const hapticAmpSlider = document.getElementById("haptic-amp-slider");
 const hapticAmpVal = document.getElementById("haptic-amp-val");
 const metricInputsReceived = document.getElementById("metric-inputs-received");
@@ -490,7 +492,7 @@ async function initWorker() {
       log("Worker error:", message);
     } else if (status === 'heartbeat') {
       const { message } = e.data;
-      log(message);
+      //log(message);
       metrics = e.data.metrics;
       metrics.deltas.forEach((d) => intervalHistory.push(d));
       while (intervalHistory.length > 500) intervalHistory.shift();
@@ -592,7 +594,7 @@ toggleSoundBtn.addEventListener("click", () => {
   } else {
     controls.currentVolume = 0;
   }
-  toggleSoundBtn.textContent = controls.isSoundEnabled ? "🔊 Sound on" : "🔇 Sound muted";
+  toggleSoundBtn.textContent = controls.isSoundEnabled ? "😮 Sound" : "😶 Sound";
   toggleSoundBtn.className = controls.isSoundEnabled ? "btn btn-haptic" : "btn btn-secondary";
   log(`Sound ${controls.isSoundEnabled ? 'on' : 'off'}`);
   if (hidDevice && hidDevice.opened) {
@@ -602,9 +604,19 @@ toggleSoundBtn.addEventListener("click", () => {
 
 toggleHapticBtn.addEventListener("click", () => {
   controls.isHapticsEnabled = !controls.isHapticsEnabled;
-  toggleHapticBtn.textContent = controls.isHapticsEnabled ? "🌶️ Haptics on" : "🧊️ Haptics muted";
+  toggleHapticBtn.textContent = controls.isHapticsEnabled ? "📳 Haptics" : "📱 Haptics";
   toggleHapticBtn.className = controls.isHapticsEnabled ? "btn btn-haptic" : "btn btn-secondary";
   log(`Haptics ${controls.isHapticsEnabled ? 'on' : 'off'}`);
+  if (hidDevice && hidDevice.opened) {
+    sendStateReport();
+  }
+});
+
+toggleLightsBtn.addEventListener("click", () => {
+  controls.isLightsEnabled = !controls.isLightsEnabled;
+  toggleLightsBtn.textContent = controls.isLightsEnabled ? "🌕 Lights" : "🌑 Lights";
+  toggleLightsBtn.className = controls.isLightsEnabled ? "btn btn-haptic" : "btn btn-secondary";
+  log(`Lights ${controls.isLightsEnabled ? 'on' : 'off'}`);
   if (hidDevice && hidDevice.opened) {
     sendStateReport();
   }
