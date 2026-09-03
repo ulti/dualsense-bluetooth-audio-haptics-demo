@@ -23,7 +23,14 @@ let inputState = null;
 let stateReportReady = false;
 let packetCounter = 0;
 let sequenceCounter = 0;
-let controls = {};
+let controls = {
+  playerLight1: 0,
+  playerLight2: 0,
+  playerLight3: 0,
+  playerLight4: 0,
+  playerLight5: 0,
+  playerLightFade: 1,  // player lights instantly change
+};
 
 let heartbeatInterval = 100;
 let stateReportInterval = 0;
@@ -33,6 +40,10 @@ let metrics = {
   inputsReceived: 0,
   audioReportsSent: 0,
   stateReportsSent: 0,
+  pluggedUsbPower: false,
+  pluggedHeadphones: false,
+  batteryPercent: 100,
+  batteryText: '100%',
   deltas: [],
   energy: [],
 };
@@ -174,14 +185,46 @@ function buildAudioReport(encodedA, encodedB, pcmFrame) {
 function buildStateReport() {
   const report = stateReportBuffer;
 
-  const intensity = Math.min(1.0, metrics.energy[metrics.energy.length - 1] / 10)
+  const energy = metrics.energy[metrics.energy.length - 1];
+  let intensity = Math.min(1.0, energy / 10)
+  intensity = Math.sqrt(intensity * intensity);
   const cold = {r: 30, g: 0, b: 30};
   const hot = {r: 30, g: 255, b: 30};
-  const color = {
+  let color = {
     r: Math.sqrt(0.5 * (hot.r * hot.r * intensity + cold.r * cold.r * (1 - intensity))),
     g: Math.sqrt(0.5 * (hot.g * hot.g * intensity + cold.g * cold.g * (1 - intensity))),
     b: Math.sqrt(0.5 * (hot.b * hot.b * intensity + cold.b * cold.b * (1 - intensity))),
   };
+
+  let playerLight1 = 0;
+  let playerLight2 = 0;
+  let playerLight3 = 0;
+  let playerLight4 = 0;
+  let playerLight5 = 0;
+  const playerLightFade = 0;
+  let muteLight = 0;
+  if (intensity > 0.9) {
+    playerLight1 = 1;
+    playerLight2 = 0;
+    playerLight3 = 0;
+    playerLight4 = 0;
+    playerLight5 = 1;
+  } else if (intensity > 0.7) {
+    playerLight1 = 0;
+    playerLight2 = 1;
+    playerLight3 = 0;
+    playerLight4 = 1;
+    playerLight5 = 0;
+  } else if (intensity > 0.3) {
+    playerLight1 = 0;
+    playerLight2 = 0;
+    playerLight3 = 1;
+    playerLight4 = 0;
+    playerLight5 = 0;
+  }
+  if (intensity > 0.95) {
+    muteLight = 1;
+  }
 
   report[0] = 0x32;
   report[1] = getNextSequenceByte();
@@ -189,17 +232,37 @@ function buildStateReport() {
   report[3] = 0x3F;
 
   const state = 4;
-  report[state + 0] = 0xB0;
-  report[state + 1] = 0xB6;
-  report[state + 4] = controls.currentVolume & 0x7F;
-  report[state + 5] = controls.currentVolume & 0x7F;
-  report[state + 6] = 0x40;
-  report[state + 7] = (controls.currentTarget === 'headset') ? 0x20 : 0x00;
-  report[state + 37] = 0x03;
-  report[state + 38] = 0x02;
-  report[state + 39] = 0x01;
-  report[state + 41] = 0x02;
-  report[state + 43] = 0x04;
+  report[state + 0] = 0xF0;  // ~EnableRumbleEmulation
+                             // ~UseRumbleNotHaptics
+                             // ~AllowRightTriggerFFB
+                             // ~AllowLeftTriggerFFB
+                             // AllowHeadphoneVolume
+                             // AllowSpeakerVolume
+                             // AllowMicVolume
+                             // AllowAudioControl
+  report[state + 1] = 0xB7;  // AllowMuteLight
+                             // AllowAudioMute
+                             // AllowLedColor
+                             // ~ResetLights
+                             // AllowPlayerIndicators
+                             // AllowHapticLowPassFilter
+                             // ~AllowMotorPowerLevel
+                             // AllowAudioControl2
+  report[state + 4] = controls.currentVolume & 0x7F;  // VolumeHeadphones
+  report[state + 5] = controls.currentVolume & 0x7F;  // VolumeSpeaker
+  report[state + 6] = 0x00;  // VolumeMic
+  report[state + 7] = (controls.currentTarget === 'headset') ? 0x20 : 0x00;  // OutputPathSelect
+  report[state + 8] = (muteLight) ? 0x01 : 0x00;  // MuteLightMode
+  report[state + 37] = 0x01;  // SpeakerCompPreGain
+                              // ~BeamformingEnable
+  report[state + 38] = 0x03;  // AllowLightBrightnessChange
+                              // AllowColorLightFadeAnimation
+                              // ~EnableImprovedRumbleEmulation
+                              // ~UseRumbleNotHaptics2
+  report[state + 39] = 0x01;  // HapticLowPassFilter
+  report[state + 41] = 0x02;  // LightFadeAnimation
+  report[state + 42] = 0x00;  // LightBrightness
+  report[state + 43] = (playerLight1 << 0) || (playerLight2 << 1) || (playerLight3 << 2) || (playerLight4 << 3) || (playerLight5 << 4) || (playerLightFade << 5);
   report[state + 44] = Math.round(color.r) & 0xFF;
   report[state + 45] = Math.round(color.g) & 0xFF;
   report[state + 46] = Math.round(color.b) & 0xFF;
@@ -304,6 +367,10 @@ function onInputReport(event) {
     }
 
     inputState = { hasHid, seqNo, axes, buttons, buttonsDown, buttonsUp, buttonsPressed, power, plugged, mic };
+    metrics.pluggedUsbPower = pluggedUsbPower;
+    metrics.pluggedHeadphones = pluggedHeadphones;
+    metrics.batteryPercent = batteryPercent;
+    metrics.batteryText = `${batteryPercent}%${powerState === 1 ? '🔌' : ''}${powerState === 2 ? ' (full)' : ''}`;
     if (!oldState || oldState.plugged.pluggedHeadphones != pluggedHeadphones) {
       controls.currentTarget = pluggedHeadphones ? 'headset' : 'speaker';
       const plugged = pluggedHeadphones;
@@ -415,7 +482,7 @@ self.onmessage = async (e) => {
     return;
   }
 
-  // send-state-report - Called after changing control parameters or LED colors.
+  // send-state-report - Called after changing control parameters.
   // Sends a state report to the device.
   if (action === 'send-state-report') {
     if (!hidDevice || !hidDevice.opened) {
