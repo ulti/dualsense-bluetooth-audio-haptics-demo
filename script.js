@@ -79,18 +79,8 @@ const STATE_REPORT_ID = 0x32;
 const AUDIO_REPORT_ID = 0x39;
 
 const DEFAULT_AUDIO_FILE = 'Not Footprints ehhhh (take 006) S80.mp3';
-const HEARTBEAT_COLORS = [
-  { name: "Vivid Red", hex: "#FF0000", r: 255, g: 0, b: 0 },
-  { name: "Neon Green", hex: "#00FF00", r: 0, g: 255, b: 0 },
-  { name: "Deep Blue", hex: "#0000FF", r: 0, g: 0, b: 255 },
-  { name: "Bright Cyan", hex: "#00FFFF", r: 0, g: 255, b: 255 },
-  { name: "Magenta", hex: "#FF00FF", r: 255, g: 0, b: 255 },
-  { name: "Electric Yellow", hex: "#FFFF00", r: 255, g: 255, b: 0 },
-  { name: "Vibrant Orange", hex: "#FF7700", r: 255, g: 119, b: 0 },
-  { name: "Pure White", hex: "#FFFFFF", r: 255, g: 255, b: 255 }
-];
 
-let encoder = true;
+let encoderReady = false;
 let audioContext = null;
 let workletNode = null;
 let worker = null;
@@ -99,10 +89,6 @@ let hidDevice = null;
 
 // Decoded audio data
 let audioData = null;
-
-// Heartbeat LED
-let heartbeatTimer = null;
-let currentColorIndex = 0;
 
 // UI controls (per-device)
 let controls = {
@@ -123,12 +109,11 @@ let protocol = {
 
 // Metrics (per-device)
 let metrics = {
-  lastSendTimestamp: 0,
-  intervalHistory: [],
   inputsReceived: 0,
   audioReportsSent: 0,
   stateReportsSent: 0,
 };
+let intervalHistory = [];
 
 const fullReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
 const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
@@ -138,7 +123,6 @@ const connectBtn = document.getElementById("connect-btn");
 const disconnectBtn = document.getElementById("disconnect-btn");
 const connectionStatus = document.getElementById("connection-status");
 const statusText = document.getElementById("status-text");
-const encoderStatus = document.getElementById("encoder-status");
 const toggleAudioBtn = document.getElementById("toggle-audio-btn");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeVal = document.getElementById("volume-val");
@@ -147,12 +131,9 @@ const toggleSoundBtn = document.getElementById("toggle-sound-btn");
 const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
 const hapticAmpSlider = document.getElementById("haptic-amp-slider");
 const hapticAmpVal = document.getElementById("haptic-amp-val");
-//const metricInputsReceived = document.getElementById("metric-inputs-received");
-//const metricAudioSent = document.getElementById("metric-audio-sent");
-//const metricStateSent = document.getElementById("metric-state-sent");
-//const metricInterval = document.getElementById("metric-interval");
-//const colorPreview = document.getElementById("current-color-preview");
-//const colorNameText = document.getElementById("color-name-text");
+const metricInputsReceived = document.getElementById("metric-inputs-received");
+const metricAudioSent = document.getElementById("metric-audio-sent");
+const metricStateSent = document.getElementById("metric-state-sent");
 const consoleLog = document.getElementById("console-log");
 const clearLogBtn = document.getElementById("clear-log-btn");
 const audioFileInput = document.getElementById("audio-file-input");
@@ -189,24 +170,6 @@ function fillSonyCrc(report) {
   const view = new DataView(report.buffer, report.byteOffset, report.byteLength);
   view.setUint32(report.length - 4, crc, true); // Little-endian
   return crc;
-}
-
-// --- Resample Stereo Linear (1024 frames -> 960 frames) ---
-function resampleStereoLinear(input, inputFrames, output, outputFrames) {
-  const step = inputFrames / outputFrames; // 1024 / 960 = 1.06666667
-  for (let outputFrame = 0; outputFrame < outputFrames; outputFrame++) {
-    const sourcePosition = outputFrame * step;
-    const sourceFrame = Math.floor(sourcePosition);
-    const fraction = sourcePosition - sourceFrame;
-    const nextFrame = Math.min(sourceFrame + 1, inputFrames - 1);
-
-    const sourceOffset = sourceFrame * 2;
-    const nextOffset = nextFrame * 2;
-    const outputOffset = outputFrame * 2;
-
-    output[outputOffset] = input[sourceOffset] + (input[nextOffset] - input[sourceOffset]) * fraction;
-    output[outputOffset + 1] = input[sourceOffset + 1] + (input[nextOffset + 1] - input[sourceOffset + 1]) * fraction;
-  }
 }
 
 // Extract interleaved channel data from the rendered AudioBuffer
@@ -247,7 +210,7 @@ async function loadAudioFromBuffer(buffer) {
     workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
   }
 
-  toggleAudioBtn.disabled = !encoder || !audioData;
+  toggleAudioBtn.disabled = !encoderReady || !audioData;
 }
 
 async function loadAudio(file) {
@@ -277,19 +240,6 @@ function loadDefaultAudio() {
   });
 }
 
-async function initOpus() {
-  try {
-    encoderStatus.textContent = "Opus Encoder: Ready (48kHz Stereo 160kbps CBR)";
-    encoderStatus.style.color = "var(--success)";
-    log("Opus encoder initialized successfully.");
-    updateUiState();
-  } catch (err) {
-    encoderStatus.textContent = `Opus Encoder Error: ${err.message}`;
-    encoderStatus.style.color = "var(--danger)";
-    log(`Failed to initialize Opus: ${err.message}`);
-  }
-}
-
 function updateUiState() {
   const isConnected = hidDevice && hidDevice.opened;
 
@@ -298,8 +248,7 @@ function updateUiState() {
     statusText.textContent = `Connected: ${hidDevice.productName || 'DualSense'}`;
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
-    toggleAudioBtn.disabled = !encoder || !audioData;
-    startHeartbeat();
+    toggleAudioBtn.disabled = !encoderReady || !audioData;
   } else {
     connectionStatus.className = "status-badge";
     statusText.textContent = "Disconnected";
@@ -307,149 +256,12 @@ function updateUiState() {
     disconnectBtn.disabled = true;
     toggleAudioBtn.disabled = true;
     if (controls.isAudioStreaming) stopAudioStream();
-    stopHeartbeat();
   }
-}
-
-// Build 0x32 State Report
-function buildStateReport({ r = 0, g = 100, b = 255, volume = 100, target = 'speaker' } = {}) {
-  const report = new Uint8Array(STATE_REPORT_LENGTH);
-  report[0] = STATE_REPORT_ID;
-  report[1] = getNextSequenceByte();
-  report[2] = 0x90;
-  report[3] = 0x3F;
-
-  const state = 4;
-  // 0b1011_0000:
-  // ~EnableRumbleEmulation
-  // ~UseRumbleNotHaptics
-  // ~AllowRightTriggerFFB
-  // ~AllowLeftTriggerFFB
-  // AllowHeadphoneVolume
-  // AllowSpeakerVolume
-  // ~AllowMicVolume
-  // AllowAudioControl
-  report[state + 0] = 0xB0;
-  // 0b1011_0110:
-  // ~AllowMuteLight
-  // AllowAudioMute
-  // AllowLedColor
-  // ~ResetLights
-  // AllowPlayerIndicators
-  // AllowHapticLowPassFilter
-  // ~AllowMotorPowerLevel
-  // AllowAudioControl2
-  report[state + 1] = 0xB6;
-
-  report[state + 4] = volume & 0x7F;  // VolumeHeadphones
-  report[state + 5] = volume & 0x7F;  // VolumeSpeaker
-  report[state + 6] = 0x40;  // VolumeMic
-  report[state + 7] = (target === 'headset') ? 0x20 : 0x00;  // AudioControl OutputPathSelect
-  report[state + 37] = 0x03;  // SpeakerCompPreGain
-  report[state + 38] = 0x02;  // AllowColorLightFadeAnimation
-  report[state + 39] = 0x01;  // HapticLowPassFilter
-  report[state + 41] = 0x02;  // LightFadeAnimation
-  report[state + 43] = 0x04;  // PlayerLight3
-  report[state + 44] = r & 0xFF;  // LedRed
-  report[state + 45] = g & 0xFF;  // LedGreen
-  report[state + 46] = b & 0xFF;  // LedBlue
-
-  fillSonyCrc(report);
-  return report;
 }
 
 async function sendStateReport() {
   if (!hidDevice || !hidDevice.opened) return;
-  const color = HEARTBEAT_COLORS[Math.floor(currentColorIndex / 20)];
-  const intensity = Math.min(1.0, 0.01 * controls.currentEnergy);
-  const r = color.r * (controls.isAudioStreaming ? intensity : 1);
-  const g = color.g * (controls.isAudioStreaming ? intensity : 1);
-  const b = color.b * (controls.isAudioStreaming ? intensity : 1);
-  const volume = controls.currentVolume;
-  const target = controls.currentTarget;
-  worker.postMessage({ action: 'sendStateReport', controls, color: {r, g, b}})
-
-  metrics.stateReportsSent++;
-  //metricStateSent.textContent = metrics.stateReportsSent;
-
-  if (metrics.stateReportsSent % 100 === 0) {
-    log(`[State] Reports: ${metrics.stateReportsSent}`);
-  }
-}
-
-// --- Fill 128-Byte HD Haptics Waveform Blocks from Active PCM Chunk ---
-function fillHapticBlocks(report, pcmFrame) {
-  let isSilent = false;
-  if (pcmFrame) {
-    const energy = pcmFrame.reduce((a, b) => a + b * b, 0);
-    isSilent = (controls.currentHaptics / 100) * energy < 0.00005;
-  }
-
-  if (!controls.isHapticsEnabled || !pcmFrame || isSilent) {
-    // Silent neutral haptic blocks
-    report[10] = 0xD0;
-    report[11] = 64;
-    report.fill(0, 12, 74);
-    report[74] = 0xD0;
-    report[75] = 64;
-    report.fill(0, 76, 138);
-    return 0;
-  }
-
-  const totalInputFrames = pcmFrame.length / 2;
-  const windowSize = SAMPLES_PER_OPUS_PACKET / 62;
-
-  // Helper to process a single haptic block (31 pairs)
-  function populateBlock(blockHeaderOffset, dataHeaderOffset, startIndex) {
-    report[blockHeaderOffset] = 0xD2;
-    report[blockHeaderOffset + 1] = 64;
-
-    let energy = 0;
-    for (let i = 0; i < 31; i++) {
-      const pairIndex = startIndex + i;
-      const windowStart = Math.floor(pairIndex * windowSize);
-      const windowEnd = Math.min(Math.floor((pairIndex + 1) * windowSize), totalInputFrames);
-
-      let maxLeft = 0;
-      let maxRight = 0;
-      let peakLeft = 0;
-      let peakRight = 0;
-
-      // Find peak absolute amplitude within the window to preserve transients
-      for (let f = windowStart; f < windowEnd; f++) {
-        const lVal = pcmFrame[f * 2];
-        const rVal = pcmFrame[f * 2 + 1];
-
-        if (Math.abs(lVal) > Math.abs(peakLeft)) peakLeft = lVal;
-        if (Math.abs(rVal) > Math.abs(peakRight)) peakRight = rVal;
-      }
-
-      const scale = 8 * (controls.currentHaptics / 100);
-      peakLeft *= scale;
-      peakRight *= scale;
-
-      if (Math.abs(peakLeft) < 0.005) peakLeft = 0;
-      if (Math.abs(peakRight) < 0.005) peakRight = 0;
-
-      if (Math.abs(peakLeft) > 1.0) peakLeft = 1.0;
-      if (Math.abs(peakRight) > 1.0) peakRight = 1.0;
-
-      energy += peakLeft * peakLeft + peakRight * peakRight;
-      report[dataHeaderOffset + i * 2] = Math.round(peakLeft * 127.0) & 0xFF;
-      report[dataHeaderOffset + i * 2 + 1] = Math.round(peakRight * 127.0) & 0xFF;
-    }
-    return energy;
-  }
-
-  let energy = 0;
-
-  // Block 1: pairs 0 to 30
-  energy += populateBlock(10, 12, 0);
-
-  // Block 2: pairs 31 to 61
-  energy += populateBlock(74, 76, 31);
-
-  return energy;
+  worker.postMessage({ action: 'send-state-report', controls })
 }
 
 function openWorkerMessageChannel() {
@@ -457,17 +269,13 @@ function openWorkerMessageChannel() {
     return;
   }
   const channel = new MessageChannel();
-
-  // 1. Send port2 to the Worker
   worker.postMessage({ action: 'init-audio-port', controls, port: channel.port2 }, [channel.port2]);
-
-  // 2. Send port1 to the AudioWorklet
   workletNode.port.postMessage({ action: 'set-audio-port', port: channel.port1 }, [channel.port1]);
 }
 
 // --- Audio & Haptic Streaming Controls ---
 async function startAudioStream() {
-  if (controls.isAudioStreaming || !hidDevice || !encoder || !audioData) return;
+  if (controls.isAudioStreaming || !hidDevice || !encoderReady || !audioData) return;
 
   controls.isAudioStreaming = true;
   toggleAudioBtn.textContent = "⏹ Stop audio";
@@ -481,8 +289,7 @@ async function startAudioStream() {
     await new Promise(r => setTimeout(r, 20));
   }
 
-  metrics.lastSendTimestamp = 0;
-  metrics.intervalHistory = [];
+  intervalHistory = [];
 
   try {
     if (!audioContext || audioContext.state === 'closed') {
@@ -539,43 +346,6 @@ function stopAudioStream() {
   log(`[Audio & Haptics] Stream stopped. Audio reports sent: ${metrics.audioReportsSent}`);
 }
 
-// --- Heartbeat Logic ---
-function startHeartbeat() {
-  if (heartbeatTimer) return;
-
-  const cycle = async () => {
-    if (hidDevice !== null && !hidDevice.opened) {
-      hidDevice = null;
-      stopHeartbeat();
-      log(`HID device closed`);
-      return;
-    }
-
-    const color = HEARTBEAT_COLORS[Math.floor(currentColorIndex / 20)];
-    currentColorIndex = (currentColorIndex + 1) % (HEARTBEAT_COLORS.length * 20);
-
-    //colorPreview.style.backgroundColor = color.hex;
-    //colorNameText.textContent = `LED color: ${color.name}`;
-
-    try {
-      await sendStateReport();
-    } catch (e) {}
-    controls.currentEnergy = 0;
-  };
-
-  cycle();
-  heartbeatTimer = setInterval(cycle, 1000);
-}
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-  //colorNameText.textContent = "LED color: Idle";
-  //colorPreview.style.backgroundColor = "#000000";
-}
-
 function onHeadphonesPlugged(plugged) {
   const target = plugged ? 'headset' : 'speaker';
   controls.currentTarget = target;
@@ -597,7 +367,7 @@ async function onConnect(device) {
     return;
   }
   if (worker) {
-    worker.postMessage({action: 'initHid'});
+    worker.postMessage({action: 'init-hid'});
   }
 
   log(`Connected: ${hidDevice.productName} [${vidpid}]`);
@@ -650,7 +420,7 @@ function drawJitterChart() {
   ctx.lineTo(width, height / 2);
   ctx.stroke();
 
-  const history = metrics.intervalHistory;
+  const history = intervalHistory;
   if (history.length === 0) {
     jitterStats.textContent = `Min: 0.00ms | Max: 0.00ms`;
     return;
@@ -694,7 +464,7 @@ async function initWorker() {
     type: 'module'
   });
   worker.postMessage({
-    action: 'init',
+    action: 'init-opus',
     config: {
       sampleRate: SAMPLE_RATE,
       channels: CHANNELS,
@@ -707,24 +477,21 @@ async function initWorker() {
     const { status } = e.data;
     if (status === 'ready') {
       log("Opus encoder worker initialized successfully.");
+      encoderReady = true;
+      updateUiState();
     } else if (status === 'error') {
       const { message } = e.data;
       log("Worker error:", message);
-    } else if (status === 'metrics') {
-      const { timestamp } = e.data;
-      metrics.lastSendTimestamp = timestamp;
-      metrics.stateReportsSent = e.data.metrics.stateReportsSent;
-      metrics.audioReportsSent = e.data.metrics.audioReportsSent;
-      if (metrics.lastSendTimestamp > 0) {
-        const delta = timestamp - metrics.lastSendTimestamp;
-        metrics.intervalHistory.push(delta);
-        if (metrics.intervalHistory.length > 200) metrics.intervalHistory.shift();
-
-        const avgInterval = metrics.intervalHistory.reduce((a, b) => a + b, 0) / metrics.intervalHistory.length;
-        //metricInterval.textContent = `${avgInterval.toFixed(3)} ms`;
-        //drawJitterChart();
-      }
-      metrics.lastSendTimestamp = timestamp;
+    } else if (status === 'heartbeat') {
+      const { message } = e.data;
+      log(message, e.data.metrics.deltas);
+      metrics = e.data.metrics;
+      metrics.deltas.forEach((d) => intervalHistory.push(d));
+      while (intervalHistory.length > 1000) intervalHistory.shift();
+      metricInputsReceived.textContent = metrics.inputsReceived;
+      metricStateSent.textContent = metrics.stateReportsSent;
+      metricAudioSent.textContent = metrics.audioReportsSent;
+      drawJitterChart();
     } else if (status === 'headset') {
       const { plugged } = e.data;
       onHeadphonesPlugged(plugged);
@@ -734,13 +501,8 @@ async function initWorker() {
   let devices = await navigator.hid.getDevices();
   devices = devices.filter(isDualSenseBluetooth).filter((d) => d.opened);
   if (devices.length === 1) {
-    worker.postMessage({action: 'initHid'});
+    worker.postMessage({action: 'init-hid'});
   }
-
-  encoderStatus.textContent = "Opus Encoder: Ready (48kHz Stereo 160kbps CBR)";
-  encoderStatus.style.color = "var(--success)";
-  log("Opus encoder initialized successfully.");
-  updateUiState();
 }
 
 // --- Event Listeners ---
@@ -789,7 +551,6 @@ connectBtn.addEventListener("click", async () => {
 disconnectBtn.addEventListener("click", async () => {
   if (hidDevice && hidDevice.opened) {
     stopAudioStream();
-    stopHeartbeat();
     await hidDevice.close();
     hidDevice.forget();
     hidDevice = null;
@@ -869,11 +630,6 @@ clearLogBtn.addEventListener("click", () => {
   consoleLog.value = "";
 });
 
-// Initialize Opus encoder
 initWorker();
-
-// Initialize default audio
 loadDefaultAudio();
-
-// Check for connected DualSenses
 connectToDualSense();
