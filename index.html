@@ -20,6 +20,10 @@
           <div class="status-dot"></div>
           <span id="status-text">Disconnected</span>
         </div>
+        <div id="battery-status" class="status-badge">
+          <div class="status-dot"></div>
+          <span id="battery-status-text">Battery:</span>
+        </div>
       </div>
       <div class="row" style="margin-bottom: 15px;">
         <button id="connect-btn" class="btn btn-primary">Connect DualSense</button>
@@ -91,15 +95,6 @@
         </div>
         <canvas id="jitter-canvas"></canvas>
       </div>
-    </div>
-
-    <!-- Diagnostic Log Console -->
-    <div class="card">
-      <div class="card-title">
-        <span>Log</span>
-        <button id="clear-log-btn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">Clear</button>
-      </div>
-      <textarea id="console-log" readonly placeholder="Diagnostic logs will appear here..."></textarea>
     </div>
   </div>
 
