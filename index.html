@@ -47,7 +47,7 @@
       </div>
 
       <div class="row" style="margin-bottom: 15px;">
-        <button id="toggle-sound-btn" class="btn btn-haptic">🔊 Sound on</button>
+        <button id="toggle-sound-btn" class="btn btn-haptic">😮 Sound</button>
 
         <div class="control-group">
           <span class="control-label">Volume: <span id="volume-val">100</span>%</span>
@@ -55,7 +55,6 @@
         </div>
 
         <div class="control-group">
-          <span class="control-label">Output select</span>
           <select id="audio-target-select">
             <option value="speaker" selected>Speaker</option>
             <option value="headset">Headset</option>
@@ -64,12 +63,16 @@
       </div>
 
       <div class="row" style="margin-bottom: 15px;">
-        <button id="toggle-haptic-btn" class="btn btn-haptic">🌶️ Haptics on</button>
+        <button id="toggle-haptic-btn" class="btn btn-haptic">📳 Haptics</button>
 
         <div class="control-group">
           <span class="control-label">Intensity: <span id="haptic-amp-val">100</span>%</span>
           <input type="range" id="haptic-amp-slider" min="0" max="100" step="5" value="100">
         </div>
+      </div>
+
+      <div class="row" style="margin-bottom: 15px;">
+        <button id="toggle-lights-btn" class="btn btn-haptic">🌕 Lights</button>
       </div>
 
       <div class="metrics-grid">
