@@ -392,7 +392,7 @@ function onInputReport(event) {
       metrics.batteryPercent = batteryPercent;
       metrics.batteryText = `${batteryPercent}%${powerState === 1 ? '🔌' : ''}${powerState === 2 ? ' (full)' : ''}`;
       const percent = batteryPercent;
-      const pluggedUsb = controls.pluggedUsbPower || controls.pluggedUsbData;
+      const plugged = controls.pluggedUsbPower || controls.pluggedUsbData;
       self.postMessage({ status: 'power', percent, plugged });
     }
     metrics.pluggedUsbPower = pluggedUsbPower;
