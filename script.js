@@ -98,6 +98,7 @@ let controls = {
   isLightsEnabled: true,
   currentVolume: 100,
   currentHaptics: 100,
+  currentLightsInterval: 0,
   currentTarget: 'speaker',
 };
 
@@ -134,6 +135,8 @@ const toggleHapticBtn = document.getElementById("toggle-haptic-btn");
 const toggleLightsBtn = document.getElementById("toggle-lights-btn");
 const hapticAmpSlider = document.getElementById("haptic-amp-slider");
 const hapticAmpVal = document.getElementById("haptic-amp-val");
+const lightFrameRateSlider = document.getElementById("light-frame-rate-slider");
+const lightFrameRateVal = document.getElementById("light-frame-rate-val");
 const metricInputsReceived = document.getElementById("metric-inputs-received");
 const metricAudioSent = document.getElementById("metric-audio-sent");
 const metricStateSent = document.getElementById("metric-state-sent");
@@ -630,6 +633,15 @@ hapticAmpSlider.addEventListener("input", (e) => {
   }
   hapticAmpVal.textContent = e.target.value;
   controls.currentHaptics = parseInt(e.target.value, 10);
+  if (hidDevice && hidDevice.opened) {
+    sendStateReport();
+  }
+});
+
+lightFrameRateSlider.addEventListener("input", (e) => {
+  const isMax = e.target.value >= 51;
+  lightFrameRateVal.textContent = isMax ? 'max' : `${e.target.value} Hz`;
+  controls.currentLightsInterval = isMax ? 0 : 1000 / e.target.value;
   if (hidDevice && hidDevice.opened) {
     sendStateReport();
   }
