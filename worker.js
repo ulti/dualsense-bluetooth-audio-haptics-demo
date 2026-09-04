@@ -190,8 +190,12 @@ function buildStateReport() {
   const energy = metrics.energy[metrics.energy.length - 1];
   let intensity = Math.min(1.0, energy / 10)
   intensity = Math.sqrt(intensity * intensity);
-  const cold = {r: 30, g: 0, b: 30};
-  const hot = {r: 30, g: 255, b: 30};
+  let cold = {r: 30, g: 0, b: 30};
+  let hot = {r: 30, g: 255, b: 30};
+  if (inputState.power.batteryPercent <= 10) {
+    cold = {r: 30, g: 0, b: 0};
+    hot = {r: 255, g: 0, b: 0};
+  }
   let color = {r: 0, g: 0, b: 0};
 
   let playerLight1 = 0;
@@ -199,7 +203,7 @@ function buildStateReport() {
   let playerLight3 = 0;
   let playerLight4 = 0;
   let playerLight5 = 0;
-  const playerLightFade = 0;
+  const playerLightFade = 1;
   let muteLight = 0;
   if (controls.isLightsEnabled) {
     color = {
@@ -213,10 +217,22 @@ function buildStateReport() {
       playerLight3 = 0;
       playerLight4 = 0;
       playerLight5 = 1;
+    } else if (intensity > 0.8) {
+      playerLight1 = 1;
+      playerLight2 = 1;
+      playerLight3 = 0;
+      playerLight4 = 1;
+      playerLight5 = 1;
     } else if (intensity > 0.7) {
       playerLight1 = 0;
       playerLight2 = 1;
       playerLight3 = 0;
+      playerLight4 = 1;
+      playerLight5 = 0;
+    } else if (intensity > 0.6) {
+      playerLight1 = 0;
+      playerLight2 = 1;
+      playerLight3 = 1;
       playerLight4 = 1;
       playerLight5 = 0;
     } else if (intensity > 0.3) {
@@ -267,7 +283,7 @@ function buildStateReport() {
   report[state + 39] = 0x01;  // HapticLowPassFilter
   report[state + 41] = 0x02;  // LightFadeAnimation
   report[state + 42] = 0x00;  // LightBrightness
-  report[state + 43] = (playerLight1 << 0) || (playerLight2 << 1) || (playerLight3 << 2) || (playerLight4 << 3) || (playerLight5 << 4) || (playerLightFade << 5);
+  report[state + 43] = (playerLight1 << 0) | (playerLight2 << 1) | (playerLight3 << 2) | (playerLight4 << 3) | (playerLight5 << 4) | (playerLightFade << 5);
   report[state + 44] = Math.round(color.r) & 0xFF;
   report[state + 45] = Math.round(color.g) & 0xFF;
   report[state + 46] = Math.round(color.b) & 0xFF;
@@ -372,10 +388,15 @@ function onInputReport(event) {
     }
 
     inputState = { hasHid, seqNo, axes, buttons, buttonsDown, buttonsUp, buttonsPressed, power, plugged, mic };
+    if (!oldState || oldState.power.batteryPercent != batteryPercent || oldState.power.powerState != powerState) {
+      metrics.batteryPercent = batteryPercent;
+      metrics.batteryText = `${batteryPercent}%${powerState === 1 ? '🔌' : ''}${powerState === 2 ? ' (full)' : ''}`;
+      const percent = batteryPercent;
+      const pluggedUsb = controls.pluggedUsbPower || controls.pluggedUsbData;
+      self.postMessage({ status: 'power', percent, plugged });
+    }
     metrics.pluggedUsbPower = pluggedUsbPower;
     metrics.pluggedHeadphones = pluggedHeadphones;
-    metrics.batteryPercent = batteryPercent;
-    metrics.batteryText = `${batteryPercent}%${powerState === 1 ? '🔌' : ''}${powerState === 2 ? ' (full)' : ''}`;
     if (!oldState || oldState.plugged.pluggedHeadphones != pluggedHeadphones) {
       controls.currentTarget = pluggedHeadphones ? 'headset' : 'speaker';
       const plugged = pluggedHeadphones;
@@ -455,19 +476,19 @@ self.onmessage = async (e) => {
 
         // Send the audio report
         const now = Date.now();
-        await hidDevice.sendReport(report[0], report.slice(1));
+        await hidDevice.sendReport(report[0], report.subarray(1));
         if (lastAudioReportTimestamp) {
           metrics.deltas.push(now - lastAudioReportTimestamp);
         }
         lastAudioReportTimestamp = now;
         ++metrics.audioReportsSent;
-        if (!stateReportReady && now - lastStateReportTimestamp > stateReportInterval) {
+        if (!stateReportReady && now - lastStateReportTimestamp > controls.currentLightsInterval) {
           buildStateReport();
         }
 
         // Send the state report
         if (stateReportReady) {
-          await hidDevice.sendReport(stateReportBuffer[0], stateReportBuffer.slice(1));
+          await hidDevice.sendReport(stateReportBuffer[0], stateReportBuffer.subarray(1));
           stateReportReady = false;
           ++metrics.stateReportsSent;
         }
