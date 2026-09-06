@@ -85,10 +85,13 @@ let worker = null;
 let workerReady = false;
 let workletNode = null;
 let workletReady = false;
+let analyserNode = null;
+let dataArray = null;
 
 // Decoded audio data
 let decodedAudioBuffer = null;
 let activeSourceNode = null;
+let isCapturing = false;
 
 // UI controls
 let controls = {
@@ -147,6 +150,8 @@ const jitterStats = document.getElementById("jitter-stats");
 const intensityCanvas = document.getElementById("intensity-canvas");
 const intensityStats = document.getElementById("intensity-stats");
 const captureSystemAudioBtn = document.getElementById("capture-system-audio-btn");
+const spectralCanvas = document.getElementById('spectral-canvas');
+const spectralCtx = spectralCanvas.getContext('2d');
 
 const log = console.log;
 
@@ -210,7 +215,12 @@ async function loadAudio(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
     await loadAudioFromBuffer(arrayBuffer);
-    await stopAudioStream();
+    if (isCapturing) {
+      await stopCaptureSystemAudio();
+    }
+    if (controls.isAudioStreaming) {
+      await stopAudioStream();
+    }
     await startAudioStream();
 
     log('[Audio] Audio decoded & loaded successfully!');
@@ -359,6 +369,12 @@ async function startAudioStream() {
     }
 
     activeSourceNode.connect(workletNode);
+
+    analyserNode = audioContext.createAnalyser();
+    analyserNode.fftSize = 4096;
+    const bufferLength = analyserNode.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+    activeSourceNode.connect(analyserNode);
 
     const dummyGain = audioContext.createGain();
     dummyGain.gain.value = 0.0;
@@ -599,6 +615,52 @@ function drawIntensityChart() {
   }
 }
 
+function drawSpectralDisplay() {
+  if (!analyserNode || !controls.isAudioStreaming) {
+    // Clear canvas if not streaming
+    spectralCtx.fillStyle = 'rgb(15, 18, 30)';
+    spectralCtx.fillRect(0, 0, spectralCanvas.width, spectralCanvas.height);
+    return;
+  }
+
+  const width = spectralCanvas.clientWidth;
+  const height = spectralCanvas.clientHeight;
+
+  if (spectralCanvas.width !== width || spectralCanvas.height !== height) {
+    spectralCanvas.width = width;
+    spectralCanvas.height = height;
+  }
+
+  // Pull the current frequency data into your Uint8Array
+  analyserNode.getByteFrequencyData(dataArray);
+
+  // Background clear
+  //spectralCtx.fillStyle = 'rgb(15, 18, 30)';
+  spectralCtx.clearRect(0, 0, width, height);
+
+  const barWidth = (width / analyserNode.frequencyBinCount);
+  let barHeight;
+  let nextX = 0;
+
+  let coldR = 48, coldG = 25, coldB = 52;
+  let hotR = 236, hotG = 72, hotB = 153;
+  let colorR = 0, colorG = 0, colorB = 0;
+
+  for (let i = 0; i < analyserNode.frequencyBinCount; i++) {
+    const intensity = dataArray[i] / 255;
+    barHeight = intensity * height;
+
+    colorR = Math.round(Math.sqrt(0.5 * (hotR * hotR * intensity + coldR * coldR * (1 - intensity))));
+    colorG = Math.round(Math.sqrt(0.5 * (hotG * hotG * intensity + coldG * coldG * (1 - intensity))));
+    colorB = Math.round(Math.sqrt(0.5 * (hotB * hotB * intensity + coldB * coldB * (1 - intensity))));
+
+    spectralCtx.fillStyle = `rgb(${colorR}, ${colorG}, ${colorB})`;
+    const x = nextX;
+    nextX = Math.round(i * barWidth);
+    spectralCtx.fillRect(x, height - barHeight, nextX - x, barHeight);
+  }
+}
+
 async function initWorker() {
   worker = new Worker(new URL('./worker.js', import.meta.url), {
     type: 'module'
@@ -648,6 +710,7 @@ async function initWorker() {
         metricAudioSent.textContent = metrics.audioReportsSent;
         drawJitterChart();
         drawIntensityChart();
+        drawSpectralDisplay();
       } else if (status === 'headset') {
         const { plugged } = e.data;
         onHeadphonesPlugged(plugged);
@@ -666,7 +729,11 @@ async function initWorker() {
   await connectToDualSense();
 }
 
-function stopCaptureSystemAudio() {
+async function stopCaptureSystemAudio() {
+  if (!isCapturing) {
+    return;
+  }
+  isCapturing = false;
   if (window.activeMediaStream) {
     try {
       window.activeMediaStream.getTracks().forEach(track => track.stop());
@@ -676,7 +743,7 @@ function stopCaptureSystemAudio() {
   captureSystemAudioBtn.textContent = "🖥️ Capture";
   captureSystemAudioBtn.className = "btn btn-secondary";
   if (controls.isAudioStreaming) {
-    stopAudioStream();
+    await stopAudioStream();
   }
   updateUiState();
 }
@@ -710,6 +777,7 @@ async function toggleCaptureSystemAudio() {
     window.activeMediaStream = stream;
     decodedAudioBuffer = null; // Clear out file buffer override if switching to live capture
 
+    isCapturing = true;
     captureSystemAudioBtn.textContent = "🎙️ Capture";
     captureSystemAudioBtn.className = "btn btn-haptic";
 
