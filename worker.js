@@ -13,9 +13,28 @@ const STATE_REPORT_LENGTH = 142;
 
 const audioReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
 const stateReportBuffer = new Uint8Array(STATE_REPORT_LENGTH);
+const audioReportPayload = audioReportBuffer.subarray(1);
+const stateReportPayload = stateReportBuffer.subarray(1);
 const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
+const frameA = resampleOutputBuffer.subarray(0, SAMPLES_PER_OPUS_PACKET);
+const frameB = resampleOutputBuffer.subarray(SAMPLES_PER_OPUS_PACKET, SAMPLES_PER_OPUS_PACKET * 2);
+
+// --- Ring Buffer for Timing Jitter Elimination ---
+const RING_CAPACITY = 8;
+const ringBuffers = Array.from({ length: RING_CAPACITY }, () => new Uint8Array(FULL_REPORT_LENGTH));
+const ringPayloads = ringBuffers.map(b => b.subarray(1));
+let ringWriteIndex = 0;
+let ringReadIndex = 0;
+let ringCount = 0;
+
+let isAudioLoopRunning = false;
+let audioTimerHandle = null;
+let nextAudioSendTime = 0;
+let lastHeartbeatTimestamp = null;
+const AUDIO_INTERVAL_MS = 21.333333;
 
 let encoder = null;
+let encoderReady = false;
 let audioPort = null;
 let hidDevice = null;
 let inputState = null;
@@ -25,7 +44,7 @@ let packetCounter = 0;
 let sequenceCounter = 0;
 let controls = {};
 
-let heartbeatInterval = 100;
+let heartbeatInterval = 1000 / 30;  // 30 Hz
 let stateReportInterval = 0;
 let lastStateReportTimestamp = null;
 let lastAudioReportTimestamp = null;
@@ -57,18 +76,17 @@ for (let i = 0; i < 256; i++) {
   CRC32_TABLE[i] = c >>> 0;
 }
 
-function sonyCrc32(data) {
-  let crc = ~0xEADA2D49 >>> 0;
-  for (let i = 0; i < data.length; i++) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ data[i]) & 0xFF];
-  }
-  return (~crc) >>> 0;
-}
-
 function fillSonyCrc(report) {
-  const crc = sonyCrc32(report.subarray(0, report.length - 4));
-  const view = new DataView(report.buffer, report.byteOffset, report.byteLength);
-  view.setUint32(report.length - 4, crc, true);
+  const dataLen = report.length - 4;
+  let crc = ~0xEADA2D49 >>> 0;
+  for (let i = 0; i < dataLen; i++) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ report[i]) & 0xFF];
+  }
+  crc = (~crc) >>> 0;
+  report[dataLen] = crc & 0xFF;
+  report[dataLen + 1] = (crc >>> 8) & 0xFF;
+  report[dataLen + 2] = (crc >>> 16) & 0xFF;
+  report[dataLen + 3] = (crc >>> 24) & 0xFF;
   return crc;
 }
 
@@ -153,11 +171,10 @@ function fillHapticBlocks(report, pcmFrame) {
   return populateBlock(10, 12, 0) + populateBlock(74, 76, 31);
 }
 
-function buildAudioReport(encodedA, encodedB, pcmFrame) {
-  const report = audioReportBuffer;
+function buildAudioReportIntoSlot(slotIndex, encodedA, encodedB, pcmFrame) {
+  const report = ringBuffers[slotIndex];
 
   report[0] = AUDIO_REPORT_ID;
-  report[1] = getNextSequenceByte();
   report[2] = 0x91;
   report[3] = 0x06;
   report[4] = 0x7E;
@@ -166,9 +183,6 @@ function buildAudioReport(encodedA, encodedB, pcmFrame) {
   report[6] = 64;
   report[7] = 64;
   report[8] = 64;
-
-  packetCounter = (packetCounter + 2) & 0xFF;
-  report[9] = packetCounter;
 
   const frameEnergy = fillHapticBlocks(report, pcmFrame);
   metrics.energy.push(frameEnergy);
@@ -179,24 +193,104 @@ function buildAudioReport(encodedA, encodedB, pcmFrame) {
 
   report.set(encodedA, 142);
   report.set(encodedB, 342);
+}
 
-  fillSonyCrc(report);
-  return report;
+function startAudioSendLoop() {
+  if (isAudioLoopRunning) return;
+  isAudioLoopRunning = true;
+  nextAudioSendTime = performance.now();
+  scheduleAudioSendTick();
+}
+
+function stopAudioSendLoop() {
+  isAudioLoopRunning = false;
+  if (audioTimerHandle !== null) {
+    clearTimeout(audioTimerHandle);
+    audioTimerHandle = null;
+  }
+  ringCount = 0;
+  ringReadIndex = 0;
+  ringWriteIndex = 0;
+  lastAudioReportTimestamp = null;
+}
+
+function scheduleAudioSendTick() {
+  if (!isAudioLoopRunning) return;
+  nextAudioSendTime += AUDIO_INTERVAL_MS;
+  const now = performance.now();
+  const delay = Math.max(0, nextAudioSendTime - now);
+  audioTimerHandle = setTimeout(sendAudioReportTick, delay);
+}
+
+async function sendAudioReportTick() {
+  if (!isAudioLoopRunning) return;
+
+  if (hidDevice && hidDevice.opened && ringCount > 0) {
+    const slot = ringReadIndex;
+    ringReadIndex = (ringReadIndex + 1) % RING_CAPACITY;
+    ringCount--;
+
+    const report = ringBuffers[slot];
+    const payload = ringPayloads[slot];
+
+    // Stamp sequence, packet counter, and CRC directly before sending
+    report[1] = getNextSequenceByte();
+    packetCounter = (packetCounter + 2) & 0xFF;
+    report[9] = packetCounter;
+    fillSonyCrc(report);
+
+    const now = performance.now();
+    try {
+      await hidDevice.sendReport(AUDIO_REPORT_ID, payload);
+      if (lastAudioReportTimestamp) {
+        metrics.deltas.push(now - lastAudioReportTimestamp);
+      }
+      lastAudioReportTimestamp = now;
+      ++metrics.audioReportsSent;
+    } catch (err) {
+      console.log('Send audio report error:', err);
+    }
+  }
+
+  // Interleaved State Report (Lights / Volume) - Decoupled and throttled
+  const now = Date.now();
+  if (!stateReportReady && now - lastStateReportTimestamp > controls.currentLightsInterval) {
+    buildStateReport();
+  }
+
+  if (stateReportReady && hidDevice && hidDevice.opened) {
+    try {
+      await hidDevice.sendReport(STATE_REPORT_ID, stateReportPayload);
+      stateReportReady = false;
+      ++metrics.stateReportsSent;
+    } catch (err) {
+      console.log('Send state report error:', err);
+    }
+  }
+
+  // Periodic Heartbeat to Main UI
+  if (!lastHeartbeatTimestamp || now - lastHeartbeatTimestamp > heartbeatInterval) {
+    self.postMessage({ status: 'heartbeat', metrics });
+    lastHeartbeatTimestamp = now;
+    metrics.deltas = [];
+    metrics.energy = [];
+  }
+
+  scheduleAudioSendTick();
 }
 
 function buildStateReport() {
   const report = stateReportBuffer;
 
-  const energy = metrics.energy[metrics.energy.length - 1];
-  let intensity = Math.min(1.0, energy / 10)
-  intensity = Math.sqrt(intensity * intensity);
-  let cold = {r: 30, g: 0, b: 30};
-  let hot = {r: 30, g: 255, b: 30};
-  if (inputState.power.batteryPercent <= 10) {
-    cold = {r: 30, g: 0, b: 0};
-    hot = {r: 255, g: 0, b: 0};
+  const energy = metrics.energy[metrics.energy.length - 1] || 0;
+  let intensity = Math.min(1.0, energy / 10);
+  let coldR = 30, coldG = 0, coldB = 30;
+  let hotR = 30, hotG = 255, hotB = 30;
+  if (inputState && inputState.power && inputState.power.batteryPercent <= 10 && inputState.power.powerState != 1) {
+    coldR = 30; coldG = 0; coldB = 0;
+    hotR = 255; hotG = 0; hotB = 0;
   }
-  let color = {r: 0, g: 0, b: 0};
+  let colorR = 0, colorG = 0, colorB = 0;
 
   let playerLight1 = 0;
   let playerLight2 = 0;
@@ -206,11 +300,9 @@ function buildStateReport() {
   const playerLightFade = 1;
   let muteLight = 0;
   if (controls.isLightsEnabled) {
-    color = {
-      r: Math.sqrt(0.5 * (hot.r * hot.r * intensity + cold.r * cold.r * (1 - intensity))),
-      g: Math.sqrt(0.5 * (hot.g * hot.g * intensity + cold.g * cold.g * (1 - intensity))),
-      b: Math.sqrt(0.5 * (hot.b * hot.b * intensity + cold.b * cold.b * (1 - intensity))),
-    };
+    colorR = Math.sqrt(0.5 * (hotR * hotR * intensity + coldR * coldR * (1 - intensity)));
+    colorG = Math.sqrt(0.5 * (hotG * hotG * intensity + coldG * coldG * (1 - intensity)));
+    colorB = Math.sqrt(0.5 * (hotB * hotB * intensity + coldB * coldB * (1 - intensity)));
     if (intensity > 0.9) {
       playerLight1 = 1;
       playerLight2 = 0;
@@ -284,9 +376,9 @@ function buildStateReport() {
   report[state + 41] = 0x02;  // LightFadeAnimation
   report[state + 42] = 0x00;  // LightBrightness
   report[state + 43] = (playerLight1 << 0) | (playerLight2 << 1) | (playerLight3 << 2) | (playerLight4 << 3) | (playerLight5 << 4) | (playerLightFade << 5);
-  report[state + 44] = Math.round(color.r) & 0xFF;
-  report[state + 45] = Math.round(color.g) & 0xFF;
-  report[state + 46] = Math.round(color.b) & 0xFF;
+  report[state + 44] = Math.round(colorR) & 0xFF;
+  report[state + 45] = Math.round(colorG) & 0xFF;
+  report[state + 46] = Math.round(colorB) & 0xFF;
 
   fillSonyCrc(report);
   stateReportReady = true;
@@ -294,6 +386,10 @@ function buildStateReport() {
 }
 
 function onInputReport(event) {
+  if (!encoderReady) {
+    return;
+  }
+
   const {reportId, data} = event;
   if (reportId === INPUT_REPORT_ID) {
     ++metrics.inputsReceived;
@@ -346,25 +442,21 @@ function onInputReport(event) {
     const pluggedUsbPower = (byte54 >> 3) & 0x01;
     const usbPowerOnBt = (byte54 >> 4) & 0x01;
 
-    let batteryPercent = 0;
-    if (powerState == 2) {
-      batteryPercent = 100;
-    } else if (powerState == 0 || powerState == 1) {
-      batteryPercent = 10 * powerPercent;
-    }
-    const batteryFull = (powerState == 2);
-    const batteryAbnormalVoltage = (powerState == 10);
-    const batteryAbnormalTemperature = (powerState == 11);
-    const chargingError = (powerState == 15);
-
     const dpadUp = (dpad == 0 || dpad == 1 || dpad == 7);
     const dpadRight = (dpad == 1 || dpad == 2 || dpad == 3);
     const dpadDown = (dpad == 3 || dpad == 4 || dpad == 5);
     const dpadLeft = (dpad == 5 || dpad == 6 || dpad == 7);
 
+    let batteryPercent = 0;
+    if (powerState == 2) {
+      batteryPercent = 100;
+    } else if (powerState == 0 || powerState == 1) {
+      batteryPercent = 10 * powerPercent + 5;
+    }
+
     const axes = { leftStickX, leftStickY, rightStickX, rightStickY, triggerLeft, triggerRight };
     const buttons = { dpadUp, dpadRight, dpadDown, dpadLeft, buttonSquare, buttonCross, buttonCircle, buttonTriangle, buttonL1, buttonR1, buttonL2, buttonR2, buttonCreate, buttonOptions, buttonL3, buttonR3, buttonHome, buttonPad, buttonMute, buttonLeftFunction, buttonRightFunction, buttonLeftPaddle, buttonRightPaddle };
-    const power = { powerState, batteryPercent, batteryFull, batteryAbnormalVoltage, batteryAbnormalTemperature, chargingError, usbPowerOnBt };
+    const power = { powerState, powerPercent, usbPowerOnBt, batteryPercent };
     const plugged = { pluggedHeadphones, pluggedMic, pluggedUsbData, pluggedUsbPower };
     const mic = { hasMic, micMuted };
 
@@ -388,12 +480,17 @@ function onInputReport(event) {
     }
 
     inputState = { hasHid, seqNo, axes, buttons, buttonsDown, buttonsUp, buttonsPressed, power, plugged, mic };
-    if (!oldState || oldState.power.batteryPercent != batteryPercent || oldState.power.powerState != powerState) {
-      metrics.batteryPercent = batteryPercent;
-      metrics.batteryText = `${batteryPercent}%${powerState === 1 ? '🔌' : ''}${powerState === 2 ? ' (full)' : ''}`;
+    if (!oldState || oldState.power.powerPercent != powerPercent || oldState.power.powerState != powerState) {
+      console.log('power', power);
       const percent = batteryPercent;
+      const charging = (powerState == 1);
+      const full = (powerState == 2);
+      const abnormalVoltage = (powerState == 10);
+      const abnormalTemperature = (powerState == 11);
+      const error = (powerState == 15);
+      const batteryText = `${percent}%${charging ? '🔌' : ''}${full ? ' (full)' : ''}`;
       const plugged = controls.pluggedUsbPower || controls.pluggedUsbData;
-      self.postMessage({ status: 'power', percent, plugged });
+      self.postMessage({ status: 'power', batteryText, percent, plugged, charging, full, error, abnormalVoltage, abnormalTemperature });
     }
     metrics.pluggedUsbPower = pluggedUsbPower;
     metrics.pluggedHeadphones = pluggedHeadphones;
@@ -415,6 +512,7 @@ self.onmessage = async (e) => {
     try {
       encoder = await createEncoder(config);
       self.postMessage({ status: 'ready' });
+      encoderReady = true;
     } catch (err) {
       self.postMessage({ status: 'error', message: err.message });
     }
@@ -466,45 +564,40 @@ self.onmessage = async (e) => {
       try {
         resampleStereoLinear(pcm, 1024, resampleOutputBuffer, SAMPLES_PER_OPUS_PACKET);
 
-        const frameA = resampleOutputBuffer.subarray(0, SAMPLES_PER_OPUS_PACKET);
-        const frameB = resampleOutputBuffer.subarray(SAMPLES_PER_OPUS_PACKET, SAMPLES_PER_OPUS_PACKET * 2);
-
         const encodedA = encoder.encodeFloat(frameA);
         const encodedB = encoder.encodeFloat(frameB);
 
-        const report = buildAudioReport(encodedA, encodedB, resampleOutputBuffer);
-
-        // Send the audio report
-        const now = Date.now();
-        await hidDevice.sendReport(report[0], report.subarray(1));
-        if (lastAudioReportTimestamp) {
-          metrics.deltas.push(now - lastAudioReportTimestamp);
-        }
-        lastAudioReportTimestamp = now;
-        ++metrics.audioReportsSent;
-        if (!stateReportReady && now - lastStateReportTimestamp > controls.currentLightsInterval) {
-          buildStateReport();
+        // Enqueue into ring buffer
+        if (ringCount < RING_CAPACITY) {
+          buildAudioReportIntoSlot(ringWriteIndex, encodedA, encodedB, resampleOutputBuffer);
+          ringWriteIndex = (ringWriteIndex + 1) % RING_CAPACITY;
+          ringCount++;
+        } else {
+          // If queue is full (overrun), overwrite oldest slot to prevent latency buildup
+          buildAudioReportIntoSlot(ringWriteIndex, encodedA, encodedB, resampleOutputBuffer);
+          ringWriteIndex = (ringWriteIndex + 1) % RING_CAPACITY;
+          ringReadIndex = (ringReadIndex + 1) % RING_CAPACITY;
         }
 
-        // Send the state report
-        if (stateReportReady) {
-          await hidDevice.sendReport(stateReportBuffer[0], stateReportBuffer.subarray(1));
-          stateReportReady = false;
-          ++metrics.stateReportsSent;
+        // Start send loop once buffer is primed (at least 2 packets)
+        if (!isAudioLoopRunning && ringCount >= 2) {
+          startAudioSendLoop();
         }
 
-        // Report metrics back to the page
-        if (!lastHeartbeat || now - lastHeartbeat > heartbeatInterval) {
-          const message = `Reports I:${metrics.inputsReceived} A:${metrics.audioReportsSent} S:${metrics.stateReportsSent} | Volume: ${controls.currentVolume}% (${controls.currentTarget}) | Haptics: ${controls.currentHaptics}% | Battery: ${inputState.power.batteryPercent}%${inputState.power.powerState === 1 ? ' (charging)' : ''}${inputState.power.powerState === 2 ? ' (full)' : ''}`;
-          self.postMessage({ status: 'heartbeat', message, metrics });
-          lastHeartbeat = now;
-          metrics.deltas = [];
-          metrics.energy = [];
+        // Recycle the incoming PCM buffer back to the AudioWorklet pool
+        if (pcm && pcm.buffer) {
+          audioPort.postMessage({ action: 'recycle-buffer', buffer: pcm.buffer }, [pcm.buffer]);
         }
       } catch (err) {
         console.log(err);
       }
     };
+    return;
+  }
+
+  // stop-audio-stream - Called when playback is stopped.
+  if (action === 'stop-audio-stream') {
+    stopAudioSendLoop();
     return;
   }
 
