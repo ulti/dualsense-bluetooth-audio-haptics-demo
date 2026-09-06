@@ -7,20 +7,25 @@ const audioWorkletCode = `
       this.bufferL = new Float32Array(1024);
       this.bufferR = new Float32Array(1024);
       this.active = true;
-
-      this.customPcm = null;
-      this.customIndex = 0;
-
       this.workerPort = null;
+      // Pre-allocated pool of reusable transferable buffers to prevent GC
+      this.bufferPool = [
+        new Float32Array(2048),
+        new Float32Array(2048),
+        new Float32Array(2048),
+        new Float32Array(2048)
+      ];
 
       this.port.onmessage = (e) => {
-        if (e.data.action === 'setCustomAudio') {
-          this.customPcm = e.data.pcm; // Interleaved Float32Array
-          this.customIndex = 0;
-        } else if (e.data.action === 'stop') {
+        if (e.data.action === 'stop') {
           this.active = false;
         } else if (e.data.action === 'set-audio-port') {
           this.workerPort = e.data.port;
+          this.workerPort.onmessage = (we) => {
+            if (we.data.action === 'recycle-buffer' && we.data.buffer) {
+              this.bufferPool.push(new Float32Array(we.data.buffer));
+            }
+          };
         }
       };
     }
@@ -28,27 +33,21 @@ const audioWorkletCode = `
     process(inputs, outputs, parameters) {
       if (!this.active) return false;
 
+      const scale = 0.2;
+      const input = inputs[0];
+      const inputL = input && input[0] ? input[0] : null;
+      const inputR = input && input[1] ? input[1] : inputL;
       for (let i = 0; i < 128; i++) {
-        let sampleL = 0;
-        let sampleR = 0;
-
-        if (this.customPcm && this.customIndex < this.customPcm.length) {
-          sampleL = this.customPcm[this.customIndex] * 0.1;       // Left
-          sampleR = this.customPcm[this.customIndex + 1] * 0.1;   // Right
-          this.customIndex += 2;
-          // Loop back to start if end of track reached
-          if (this.customIndex >= this.customPcm.length) {
-            this.customIndex = 0;
-          }
-        }
+        let sampleL = inputL ? inputL[i] * scale : 0;
+        let sampleR = inputR ? inputR[i] * scale : 0;
 
         this.bufferL[this.samplesAccumulated] = sampleL;
         this.bufferR[this.samplesAccumulated] = sampleR;
         this.samplesAccumulated++;
 
         if (this.samplesAccumulated === 1024) {
-          const frames = this.samplesAccumulated;
-          const pcm = new Float32Array(frames * 2);
+          const frames = 1024;
+          const pcm = this.bufferPool.pop() || new Float32Array(2048);
           for (let s = 0; s < frames; s++) {
             pcm[s * 2] = this.bufferL[s];
             pcm[s * 2 + 1] = this.bufferR[s];
@@ -88,7 +87,8 @@ let workletNode = null;
 let workletReady = false;
 
 // Decoded audio data
-let audioData = null;
+let decodedAudioBuffer = null;
+let activeSourceNode = null;
 
 // UI controls
 let controls = {
@@ -98,7 +98,7 @@ let controls = {
   isLightsEnabled: true,
   currentVolume: 100,
   currentHaptics: 100,
-  currentLightsInterval: 0,
+  currentLightsInterval: 1000 / 20,
   currentTarget: 'speaker',
 };
 
@@ -115,6 +115,7 @@ let metrics = {
   energy: [],
 };
 let intervalHistory = [];
+let intensityHistory = [];
 
 const fullReportBuffer = new Uint8Array(FULL_REPORT_LENGTH);
 const resampleOutputBuffer = new Float32Array(SAMPLES_PER_OPUS_PACKET * 2);
@@ -143,6 +144,9 @@ const metricStateSent = document.getElementById("metric-state-sent");
 const audioFileInput = document.getElementById("audio-file-input");
 const jitterCanvas = document.getElementById("jitter-canvas");
 const jitterStats = document.getElementById("jitter-stats");
+const intensityCanvas = document.getElementById("intensity-canvas");
+const intensityStats = document.getElementById("intensity-stats");
+const captureSystemAudioBtn = document.getElementById("capture-system-audio-btn");
 
 const log = console.log;
 
@@ -186,59 +190,48 @@ function createInterleaved(buffer) {
 }
 
 async function loadAudioFromBuffer(buffer) {
-  // Ensure an AudioContext exists for decoding
-  if (!audioContext || audioContext.state === 'closed') {
-    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+  try {
+    const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      decodedAudioBuffer = await decodeCtx.decodeAudioData(buffer.slice(0));
+    } finally {
+      decodeCtx.close();
+    }
+    log('[Audio] Audio file decoded successfully into an AudioBuffer!');
+  } catch (err) {
+    log(`[Audio Error] Failed to decode audio: ${err.message}`);
+    decodedAudioBuffer = null;
   }
-
-  const decodedAudio = await audioContext.decodeAudioData(buffer);
-
-  // OfflineAudioContext to force resampling to exactly 48kHz stereo
-  const offlineCtx = new OfflineAudioContext(
-    CHANNELS,
-    Math.ceil(decodedAudio.duration * SAMPLE_RATE),
-    SAMPLE_RATE
-  );
-
-  const source = offlineCtx.createBufferSource();
-  source.buffer = decodedAudio;
-  source.connect(offlineCtx.destination);
-  source.start(0);
-
-  audioData = await offlineCtx.startRendering();
-  if (audioData && workletNode) {
-    const pcm = createInterleaved(audioData);
-    workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
-  }
-
-  toggleAudioBtn.disabled = !workerReady || !audioData;
+  updateUiState();
 }
 
 async function loadAudio(file) {
   log(`[Audio] Loading audio file: ${file.name}...`);
   try {
     const arrayBuffer = await file.arrayBuffer();
-    loadAudioFromBuffer(arrayBuffer);
-    log('[Audio] Audio decoded & resampled successfully!');
+    await loadAudioFromBuffer(arrayBuffer);
+    await stopAudioStream();
+    await startAudioStream();
+
+    log('[Audio] Audio decoded & loaded successfully!');
   } catch (err) {
     log(`[Audio Error] Failed to decode audio: ${err.message}`);
   }
 }
 
-function loadDefaultAudio() {
+async function loadDefaultAudio() {
   log(`[Audio] Loading audio file: ${DEFAULT_AUDIO_FILE}`);
-  fetch(DEFAULT_AUDIO_FILE).then(async (response) => {
-    if (!response.ok) {
-      log(`[Audio Error] Failed to load ${DEFAULT_AUDIO_FILE}`);
-      return;
-    }
-    try {
-      const audioBuffer = await response.arrayBuffer();
-      loadAudioFromBuffer(audioBuffer);
-    } catch (err) {
-      log(`[Audio Error] Failed to decode audio: ${err.message}`);
-    }
-  });
+  const response = await fetch(DEFAULT_AUDIO_FILE)
+  if (!response.ok) {
+    log(`[Audio Error] Failed to load ${DEFAULT_AUDIO_FILE}`);
+    return;
+  }
+  try {
+    const audioBuffer = await response.arrayBuffer();
+    await loadAudioFromBuffer(audioBuffer);
+  } catch (err) {
+    log(`[Audio Error] Failed to decode audio: ${err.message}`);
+  }
 }
 
 function updateUiState() {
@@ -249,18 +242,20 @@ function updateUiState() {
     statusText.textContent = `Connected: ${hidDevice.productName}`;
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
-    toggleAudioBtn.disabled = !workerReady || !audioData;
   } else {
     connectionStatus.className = "status-badge";
     statusText.textContent = "Disconnected";
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
-    toggleAudioBtn.disabled = true;
   }
+
+  // The Start audio button is enabled whenever the Opus worker is ready and audio data is loaded
+  const isAudioReady = workerReady;
+  toggleAudioBtn.disabled = !isAudioReady;
 }
 
 async function sendStateReport() {
-  if (!hidDevice || !hidDevice.opened) return;
+  if (!worker) return;
   worker.postMessage({ action: 'send-state-report', controls })
 }
 
@@ -273,15 +268,50 @@ function openWorkerMessageChannel() {
   workletNode.port.postMessage({ action: 'set-audio-port', port: channel.port1 }, [channel.port1]);
 }
 
+async function requestDualSenseConnection() {
+  try {
+    log("Requesting WebHID device.");
+    const devices = await navigator.hid.requestDevice({
+      filters: [{ vendorId: VENDOR_SONY, productId: PRODUCT_SONY_DUALSENSE }]
+    });
+
+    if (devices.length === 0) {
+      log("No device selected.");
+      return;
+    }
+
+    const filteredDevices = devices.filter(isDualSenseBluetooth);
+    if (filteredDevices.length === 0) {
+      log("Must connect to the DualSense over Bluetooth.");
+      devices.forEach((d) => d.forget());
+      return;
+    }
+
+    await onConnect(filteredDevices[0]);
+  } catch (err) {
+    log(`Connection failed: ${err.message}`);
+  }
+}
+
 // --- Audio & Haptic Streaming Controls ---
 async function startAudioStream() {
-  if (controls.isAudioStreaming || !hidDevice || !workerReady || !audioData) return;
+  if (controls.isAudioStreaming) return;
+
+  if (!hidDevice || !hidDevice.opened) {
+    log("Please connect the DualSense controller.");
+    await requestDualSenseConnection();
+    if (!hidDevice || !hidDevice.opened) return;
+  }
+
+  if (!workerReady) return;
+
+  if (!decodedAudioBuffer && !window.activeMediaStream) {
+    await loadDefaultAudio();
+  }
 
   controls.isAudioStreaming = true;
   toggleAudioBtn.textContent = "⏹ Stop audio";
   toggleAudioBtn.className = "btn btn-danger pulse";
-
-  log('[Audio & Haptics] Initializing stream');
 
   for (let i = 0; i < 8; i++) {
     if (!controls.isAudioStreaming) return;
@@ -289,7 +319,13 @@ async function startAudioStream() {
     await new Promise(r => setTimeout(r, 20));
   }
 
-  intervalHistory = [];
+  if (intervalHistory.length < 500) {
+    intervalHistory = new Array(500).fill(20);
+  }
+
+  if (intensityHistory.length < 500) {
+    intensityHistory = new Array(500).fill(20);
+  }
 
   try {
     if (!audioContext || audioContext.state === 'closed') {
@@ -309,8 +345,20 @@ async function startAudioStream() {
 
     workletNode = new AudioWorkletNode(audioContext, 'dualsense-audio-processor', {});
 
-    const pcm = createInterleaved(audioData);
-    workletNode.port.postMessage({action: 'setCustomAudio', pcm}, [pcm.buffer]);
+    if (window.activeMediaStream) {
+      activeSourceNode = audioContext.createMediaStreamSource(window.activeMediaStream);
+    } else if (decodedAudioBuffer) {
+      activeSourceNode = audioContext.createBufferSource();
+      activeSourceNode.buffer = decodedAudioBuffer;
+      activeSourceNode.loop = true; // Loop the file track automatically
+      activeSourceNode.start(0);
+    } else {
+      log("[Audio Error] No audio source available to play.");
+      stopAudioStream();
+      return;
+    }
+
+    activeSourceNode.connect(workletNode);
 
     const dummyGain = audioContext.createGain();
     dummyGain.gain.value = 0.0;
@@ -321,9 +369,9 @@ async function startAudioStream() {
       openWorkerMessageChannel();
     }
 
-    log('[Audio & Haptics] AudioWorklet running');
+    log('[Audio & Haptics] Audio routing graph active');
   } catch (err) {
-    log(`AudioWorklet initialization failed: ${err.message}`);
+    log(`Audio graph initialization failed: ${err.message}`);
   }
 }
 
@@ -331,13 +379,26 @@ function stopAudioStream() {
   if (!controls.isAudioStreaming) return;
   controls.isAudioStreaming = false;
 
+  if (activeSourceNode) {
+    try {
+      if (typeof activeSourceNode.stop === 'function') activeSourceNode.stop();
+      activeSourceNode.disconnect();
+    } catch (e) {}
+    activeSourceNode = null;
+  }
+
   if (workletNode) {
     workletNode.port.postMessage({ action: 'stop' });
     try { workletNode.disconnect(); } catch (e) {}
     workletNode = null;
   }
+
   if (audioContext && audioContext.state === 'running') {
     audioContext.suspend();
+  }
+
+  if (worker) {
+    worker.postMessage({ action: 'stop-audio-stream' });
   }
 
   toggleAudioBtn.textContent = "▶ Start audio";
@@ -401,13 +462,14 @@ function isDualSenseBluetooth(device) {
 
 async function connectToDualSense() {
   let devices = await navigator.hid.getDevices();
+  if (hidDevice) {
+    return;
+  }
   devices = devices.filter(isDualSenseBluetooth);
   if (devices.length === 0) {
     return;
   }
-  if (!hidDevice) {
-    onConnect(devices[0]);
-  }
+  onConnect(devices[0]);
 }
 
 // --- Canvas Jitter Renderer ---
@@ -437,8 +499,9 @@ function drawJitterChart() {
     return;
   }
 
-  const minVal = Math.min(...history);
-  const maxVal = Math.max(...history);
+  const hh = history;//history.filter(s => !isNaN(s) && s < 100);
+  const minVal = Math.min(...hh);
+  const maxVal = Math.max(...hh);
   jitterStats.textContent = `Min: ${minVal.toFixed(2)}ms | Max: ${maxVal.toFixed(2)}ms`;
 
   // Plotting data points
@@ -455,19 +518,85 @@ function drawJitterChart() {
   const boundsMin = Math.min(10, minVal - 2);
   const boundsMax = Math.max(35, maxVal + 2);
   const range = boundsMax - boundsMin;
+  let first = true;
 
   for (let i = 0; i < maxDataPoints; i++) {
     const val = history[startIndex + i];
+    if (isNaN(val)) {
+      continue;
+    }
     const x = i * stepX;
     const y = height - ((val - boundsMin) / range) * height;
 
-    if (i === 0) {
+    if (first) {
       ctx.moveTo(x, y);
+      first = false;
     } else {
       ctx.lineTo(x, y);
     }
   }
   ctx.stroke();
+}
+
+function drawIntensityChart() {
+  const ctx = intensityCanvas.getContext('2d');
+  const width = intensityCanvas.clientWidth;
+  const height = intensityCanvas.clientHeight;
+
+  if (intensityCanvas.width !== width || intensityCanvas.height !== height) {
+    intensityCanvas.width = width;
+    intensityCanvas.height = height;
+  }
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Background grid lines
+  ctx.strokeStyle = '#1e2235';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  ctx.stroke();
+
+  const history = intensityHistory;
+  if (history.length === 0) {
+    intensityStats.textContent = `Min: 0 | Max: 0`;
+    return;
+  }
+
+  const hh = history;//history.filter(s => !isNaN(s) && s < 100);
+  let minVal = Math.min(...hh);
+  let maxVal = Math.max(...hh);
+  intensityStats.textContent = `Min: ${minVal.toFixed(2)} | Max: ${maxVal.toFixed(2)}`;
+  maxVal = Math.max(Math.abs(minVal), Math.abs(maxVal));
+  minVal = -maxVal;
+
+  // Plotting data points
+  ctx.strokeStyle = 'var(--accent)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  const maxDataPoints = Math.min(history.length, width);
+  const startIndex = history.length - maxDataPoints;
+  const stepX = width / Math.max(maxDataPoints - 1, 1);
+
+  const boundsMin = 0;
+  const boundsMax = 1;
+  const range = boundsMax - boundsMin;
+
+  for (let i = 0; i < maxDataPoints; i++) {
+    const val = 0.01 * Math.abs(history[startIndex + i]);
+    if (isNaN(val)) {
+      continue;
+    }
+    const x = i * stepX;
+    const y0 = 0.5 * (height - ((val - boundsMin) / range) * height);
+    const y1 = 0.5 * (height + ((val - boundsMin) / range) * height);
+
+    ctx.moveTo(x, y0);
+    ctx.lineTo(x, y1);
+    ctx.stroke();
+  }
 }
 
 async function initWorker() {
@@ -484,48 +613,130 @@ async function initWorker() {
       vbr: false,
       frameSize: FRAMES_PER_OPUS_PACKET,
       complexity: 10}});
-  worker.onmessage = (e) => {
-    const { status } = e.data;
-    if (status === 'ready') {
-      log("Opus encoder worker initialized successfully.");
-      workerReady = true;
-      updateUiState();
-    } else if (status === 'error') {
-      const { message } = e.data;
-      log("Worker error:", message);
-    } else if (status === 'heartbeat') {
-      const { message } = e.data;
-      //log(message);
-      metrics = e.data.metrics;
-      metrics.deltas.forEach((d) => intervalHistory.push(d));
-      while (intervalHistory.length > 500) intervalHistory.shift();
-      metricInputsReceived.textContent = metrics.inputsReceived;
-      metricStateSent.textContent = metrics.stateReportsSent;
-      metricAudioSent.textContent = metrics.audioReportsSent;
-      batteryStatusText.textContent = `Battery: ${metrics.batteryText}`;
-      if (metrics.pluggedUsbPower || metrics.batteryPercent > 10) {
-        batteryStatus.className = "status-badge connected";
-      } else {
-        batteryStatus.className = "status-badge";
-      }
-      drawJitterChart();
-    } else if (status === 'headset') {
-      const { plugged } = e.data;
-      onHeadphonesPlugged(plugged);
-    } else if (status === 'keydown') {
-      const { key } = e.data;
-      onKeyDown(key);
-    } else if (status === 'keyup') {
-      const { key } = e.data;
-      onKeyUp(key);
-    }
-  };
 
-  let devices = await navigator.hid.getDevices();
-  devices = devices.filter(isDualSenseBluetooth).filter((d) => d.opened);
-  if (devices.length === 1) {
-    worker.postMessage({action: 'init-hid'});
+  let promise = new Promise((resolve, reject) => {
+    worker.onmessage = (e) => {
+      const { status } = e.data;
+      if (status === 'ready') {
+        log("Opus encoder worker initialized successfully.");
+        workerReady = true;
+        resolve();
+      } else if (status === 'error') {
+        const { message } = e.data;
+        log("Worker error:", message);
+        if (!workerReady) {
+          reject(message);
+        }
+      } else if (status === 'power') {
+        const { batteryText, percent, plugged, charging, full, error, abnormalVoltage, abnormalTemperature } = e.data;
+        batteryStatusText.textContent = `Battery: ${batteryText}`;
+        if (error || (percent <= 10 && !charging) || abnormalVoltage || abnormalTemperature) {
+          batteryStatus.className = "status-badge";
+        } else {
+          batteryStatus.className = "status-badge connected";
+        }
+      } else if (status === 'heartbeat') {
+        const { message } = e.data;
+        //log(message);
+        metrics = e.data.metrics;
+        metrics.deltas.forEach((d) => intervalHistory.push(d));
+        while (intervalHistory.length > 500) intervalHistory.shift();
+        metrics.energy.forEach((d) => intensityHistory.push(d));
+        while (intensityHistory.length > 500) intensityHistory.shift();
+        metricInputsReceived.textContent = metrics.inputsReceived;
+        metricStateSent.textContent = metrics.stateReportsSent;
+        metricAudioSent.textContent = metrics.audioReportsSent;
+        drawJitterChart();
+        drawIntensityChart();
+      } else if (status === 'headset') {
+        const { plugged } = e.data;
+        onHeadphonesPlugged(plugged);
+      } else if (status === 'keydown') {
+        const { key } = e.data;
+        onKeyDown(key);
+      } else if (status === 'keyup') {
+        const { key } = e.data;
+        onKeyUp(key);
+      }
+    };
+  });
+  await promise;
+  updateUiState();
+
+  await connectToDualSense();
+}
+
+function stopCaptureSystemAudio() {
+  if (window.activeMediaStream) {
+    try {
+      window.activeMediaStream.getTracks().forEach(track => track.stop());
+    } catch (e) {}
+    window.activeMediaStream = null;
   }
+  captureSystemAudioBtn.textContent = "🖥️ Capture";
+  captureSystemAudioBtn.className = "btn btn-secondary";
+  if (controls.isAudioStreaming) {
+    stopAudioStream();
+  }
+  updateUiState();
+}
+
+async function toggleCaptureSystemAudio() {
+  if (window.activeMediaStream) {
+    stopCaptureSystemAudio();
+    log("[Audio] System audio capture stopped.");
+    return;
+  }
+
+  try {
+    // Request media stream with system audio capture enabled
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        suppressLocalAudioPlayback: true
+      }
+    });
+
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      alert("No audio track was shared. Please make sure to check 'Share audio' in the prompt.");
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
+    window.activeMediaStream = stream;
+    decodedAudioBuffer = null; // Clear out file buffer override if switching to live capture
+
+    captureSystemAudioBtn.textContent = "🎙️ Capture";
+    captureSystemAudioBtn.className = "btn btn-haptic";
+
+    log("[Audio] System audio stream captured successfully.");
+    updateUiState();
+
+    if (controls.isAudioStreaming) {
+      await stopAudioStream();
+    }
+    if (!controls.isAudioStreaming) {
+      await startAudioStream();
+    }
+
+    // Handle user stopping the share via browser UI banner
+    audioTracks[0].onended = () => {
+      log("[Audio] System audio stream stopped by user.");
+      stopCaptureSystemAudio();
+    };
+
+  } catch (err) {
+    log(`[Audio Error] Failed to capture system audio: ${err.message}`);
+    stopCaptureSystemAudio();
+  }
+}
+
+async function init() {
+  await initWorker();
 }
 
 // --- Event Listeners ---
@@ -628,7 +839,7 @@ toggleLightsBtn.addEventListener("click", () => {
 hapticAmpSlider.addEventListener("input", (e) => {
   if (!controls.isHapticsEnabled) {
     controls.isHapticsEnabled = true;
-    toggleHapticBtn.textContent = "🌶️ Haptics on";
+    toggleHapticBtn.textContent = "📳 Haptics";
     toggleHapticBtn.className = "btn btn-haptic";
   }
   hapticAmpVal.textContent = e.target.value;
@@ -658,7 +869,7 @@ audioTargetSelect.addEventListener("change", (e) => {
 volumeSlider.addEventListener("input", (e) => {
   if (!controls.isSoundEnabled) {
     controls.isSoundEnabled = true;
-    toggleSoundBtn.textContent = "🔊 Sound on";
+    toggleSoundBtn.textContent = "😮 Sound";
     toggleSoundBtn.className = "btn btn-haptic";
   }
   volumeVal.textContent = e.target.value;
@@ -668,6 +879,6 @@ volumeSlider.addEventListener("input", (e) => {
   }
 });
 
-initWorker();
-loadDefaultAudio();
-connectToDualSense();
+captureSystemAudioBtn.addEventListener("click", toggleCaptureSystemAudio);
+
+init();
