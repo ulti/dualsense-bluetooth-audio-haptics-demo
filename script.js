@@ -324,7 +324,7 @@ async function startAudioStream() {
   }
 
   if (intensityHistory.length < 500) {
-    intensityHistory = new Array(500).fill(20);
+    intensityHistory = new Array(500).fill(0);
   }
 
   try {
