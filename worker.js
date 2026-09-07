@@ -165,6 +165,14 @@ function fillHapticBlocks(report, pcmFrame) {
         report[dataHeaderOffset + i * 2 + 1] = 0x00;
       }
     }
+    if (energy < 0.0001) {
+      report[10] = 0xD0;
+      report[11] = 64;
+      report.fill(0, 12, 74);
+      report[74] = 0xD0;
+      report[75] = 64;
+      report.fill(0, 76, 138);
+    }
     return energy;
   }
 
