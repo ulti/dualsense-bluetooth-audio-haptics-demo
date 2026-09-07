@@ -371,7 +371,7 @@ async function startAudioStream() {
     activeSourceNode.connect(workletNode);
 
     analyserNode = audioContext.createAnalyser();
-    analyserNode.fftSize = 4096;
+    analyserNode.fftSize = 4096 * 4;
     const bufferLength = analyserNode.frequencyBinCount;
     dataArray = new Uint8Array(bufferLength);
     activeSourceNode.connect(analyserNode);
@@ -615,6 +615,7 @@ function drawIntensityChart() {
   }
 }
 
+let energy = 0;
 function drawSpectralDisplay() {
   if (!analyserNode || !controls.isAudioStreaming) {
     // Clear canvas if not streaming
@@ -638,17 +639,30 @@ function drawSpectralDisplay() {
   //spectralCtx.fillStyle = 'rgb(15, 18, 30)';
   spectralCtx.clearRect(0, 0, width, height);
 
-  const barWidth = (width / analyserNode.frequencyBinCount);
+  const barWidthHz = SAMPLE_RATE / analyserNode.fftSize;
+  const minHz = 20;
+  const maxHz = 20000;
+  const minIndex = Math.min(analyserNode.frequencyBinCount, Math.round(minHz / barWidthHz));
+  const maxIndex = Math.min(analyserNode.frequencyBinCount, Math.round(maxHz / barWidthHz));
+  const binCount = maxIndex - minIndex;
+
+  const barWidth = (width / binCount);
   let barHeight;
   let nextX = 0;
 
+  energy += intensityHistory[intensityHistory.length - 1];
+  energy *= 0.9;
+
   let coldR = 48, coldG = 25, coldB = 52;
-  let hotR = 236, hotG = 72, hotB = 153;
+  let hotR = 136, hotG = 42, hotB = 113;
   let colorR = 0, colorG = 0, colorB = 0;
 
-  for (let i = 0; i < analyserNode.frequencyBinCount; i++) {
-    const intensity = dataArray[i] / 255;
+  const denom = Math.log10(maxHz / minHz);
+  for (let i = minIndex; i < maxIndex; ++i) {
+    let intensity = dataArray[i] / 255;
     barHeight = intensity * height;
+    intensity *= (energy / 20);
+
 
     colorR = Math.round(Math.sqrt(0.5 * (hotR * hotR * intensity + coldR * coldR * (1 - intensity))));
     colorG = Math.round(Math.sqrt(0.5 * (hotG * hotG * intensity + coldG * coldG * (1 - intensity))));
@@ -656,7 +670,7 @@ function drawSpectralDisplay() {
 
     spectralCtx.fillStyle = `rgb(${colorR}, ${colorG}, ${colorB})`;
     const x = nextX;
-    nextX = Math.round(i * barWidth);
+    nextX = Math.round(Math.log10((i + 1) * barWidthHz / minHz) * width / denom);
     spectralCtx.fillRect(x, height - barHeight, nextX - x, barHeight);
   }
 }
