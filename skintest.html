@@ -1,0 +1,2175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Winamp Skin Demo</title>
+    <!-- Include JSZip from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://unpkg.com/icojs@0.13.0/dist/ico.js"></script>
+    <style>
+        body {
+            font-family: monospace;
+            background-color: #222;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: #333;
+            padding: 20px;
+            border: 2px solid #555;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+        input[type="file"] {
+            margin-bottom: 20px;
+        }
+        #output {
+            margin-top: 20px;
+        }
+        canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 0px;
+            background: #000;
+        }
+        .error {
+            color: #ff6b6b;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Winamp Skin Demo</h2>
+        <p>Select a <code>.wsz</code> file</p>
+        <input type="file" id="skinFile" accept=".wsz,.zip">
+        <div id="output">
+          <canvas id="main-canvas" width="275" height="116"></canvas><br />
+          <canvas id="eq-canvas" width="275" height="116"></canvas><br />
+          <canvas id="pl-canvas" width="275" height="116"></canvas>
+        </div>
+    </div>
+    <script>
+
+const controls = {
+  mainActive: false,
+  windowshade: false,
+  menuButton: -1,
+  minimizeButton: -1,
+  windowshadeButton: -1,
+  closeButton: -1,
+  windowshadeOn: false,
+  stereo: 2,
+  minutes: 123,
+  seconds: 45,
+  eqOn: false,
+  eqPressed: false,
+  plPressed: false,
+  plOn: false,
+  buttonPressed: -1,  // button bar, -1 = no button
+  ejectPressed: false,
+  timeLeftMode: false,
+  isSeekable: false,
+  name: 'songname',
+  nameStartPos: 0,
+  nameOffsetInFirst: 0,
+  playIcon: 1,  // 0 = none, 1 = play, 2 = stop, 4 = pause, 8 = lost sync play
+  bitrate: 320,
+  mixrate: 48,
+  logoPressed: true,
+  clutterbarOptions: false,
+  clutterbarAlwaysOnTop: false,
+  clutterbarInfo: false,
+  clutterbarDoubleSize: false,
+  clutterbarVisualization: false,
+  position: 18,  // in pixels
+  posbarPressed: false,
+  posbarActive: false,
+  posbarClickX: 14,
+  volume: 255,  // 0 to 255
+  volbarPressed: false,
+  volbarActive: false,
+  volbarClickX: 14,
+  pan: 0,  // -127 to 127
+  panbarPressed: false,
+  panbarActive: false,
+  panbarClickX: 14,
+  playlistWidth: 275,
+  playlistHeight: 116,
+  playlistActive: false,
+  fileWhich: -1,  // -1 = none, 0 = load, 1 = save, 2 = clear
+  miscWhich: -1,
+  selWhich: -1,
+  remWhich: -1,
+  addWhich: -1,
+  playlistWhichCap: null,  // null, 'title', 'tb', 'sz', 'vs', 'lb', 'vsb', 'add', 'rem', 'sel', 'misc', 'file', 'td', 'mb',
+  playlistSliderPressed: false,
+  playlistSlider: 0,
+  playlistSongs: [],
+  fontHeight: 12,
+  playlistSliderClickY: 9,
+};
+
+let mainBmpImg = null;
+let volumeBmpImg = null;
+let balanceBmpImg = null;
+let shuffleRepeatBmpImg = null;
+let titleBarBmpImg = null;
+let monoStereoBmpImg = null;
+let controlButtonsBmpImg = null;
+let numbersBmpImg = null;
+let fontBmpImg = null;
+let playPauseBmpImg = null;
+let posbarBmpImg = null;
+let eqMainBmpImg = null;
+let eqExBmpImg = null;
+let plEditBmpImg = null;
+
+const mainCanvas = document.getElementById('main-canvas');
+const mainCanvasCtx = mainCanvas.getContext('2d');
+const eqCanvas = document.getElementById('eq-canvas');
+const eqCanvasCtx = eqCanvas.getContext('2d');
+const plCanvas = document.getElementById('pl-canvas');
+const plCanvasCtx = plCanvas.getContext('2d');
+
+async function loadSkinResources(buffer) {
+  const zip = new JSZip();
+  const zipContents = await zip.loadAsync(buffer);
+
+  const bmpFiles = [];
+  const curFiles = [];
+  for (let relativePath in zipContents.files) {
+    const f = zipContents.files[relativePath];
+    const path = relativePath.toUpperCase();
+    if (path.endsWith('.BMP')) {
+      bmpFiles.push(f);
+    } else if (path.endsWith('.CUR')) {
+      curFiles.push(f);
+    }
+  }
+
+  const resources = {};
+  const bmpPromises = bmpFiles.map(async (f) => {
+    const blob = await f.async('blob');
+    resources[f.name] = { name: f.name, blobs: [blob] };
+  });
+  const curPromises = curFiles.map(async (f) => {
+    const blobs = await loadCursor(f);
+    resources[f.name] = { name: f.name, blobs };
+  });
+  await Promise.allSettled([...bmpPromises, ...curPromises]);
+
+  mainBmpImg = await addImageFromBlob(resources['MAIN.BMP'].blobs[0]);
+  volumeBmpImg = await addImageFromBlob(resources['VOLUME.BMP'].blobs[0]);
+  balanceBmpImg = await addImageFromBlob(resources['BALANCE.BMP'].blobs[0]);
+  shuffleRepeatBmpImg = await addImageFromBlob(resources['SHUFREP.BMP'].blobs[0]);
+  titleBarBmpImg = await addImageFromBlob(resources['TITLEBAR.BMP'].blobs[0]);
+  monoStereoBmpImg = await addImageFromBlob(resources['MONOSTER.BMP'].blobs[0]);
+  controlButtonsBmpImg = await addImageFromBlob(resources['CBUTTONS.BMP'].blobs[0]);
+  numbersBmpImg = await addImageFromBlob(resources['NUMBERS.BMP'].blobs[0]);
+  fontBmpImg = await addImageFromBlob(resources['TEXT.BMP'].blobs[0]);
+  playPauseBmpImg = await addImageFromBlob(resources['PLAYPAUS.BMP'].blobs[0]);
+  posbarBmpImg = await addImageFromBlob(resources['POSBAR.BMP'].blobs[0]);
+  eqMainBmpImg = await addImageFromBlob(resources['EQMAIN.BMP'].blobs[0]);
+  eqExBmpImg = await addImageFromBlob(resources['EQ_EX.BMP'].blobs[0]);
+  plEditBmpImg = await addImageFromBlob(resources['PLEDIT.BMP'].blobs[0]);
+  drawMainWindow();
+  drawEqualizerWindow();
+  drawPlaylistWindow();
+}
+
+async function loadCursor(file) {
+  if (!file) return [];
+  const arrayBuffer = await file.async('arraybuffer');
+  const images = await ICO.parse(arrayBuffer);
+  images.map((image) => new Blob([image.buffer], { type: 'image/png' }));
+  return images;
+}
+
+function addImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = (e) => resolve(img);
+    img.onerror = (e) => reject(e);
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+function mainMouseMove(event) {
+  const canvas = mainCanvas;
+  if (!canvas) {
+    return;
+  }
+  const pressed = (event.buttons & 0x01);
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  // volbar
+  if (controls.volbarActive) {
+    let v = x - controls.volbarClickX - 107;
+    v = Math.floor((v * 255) / 51);
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    controls.volume = v;
+    drawMainWindow();
+    return;
+  }
+
+  // panbar
+  if (controls.panbarActive) {
+    let v = x - controls.panbarClickX - 177;
+    if (v < 0) v = 0;
+    if (v > 24) v = 24;
+    v -= 12;
+    if (-2 < v && v < 2) v = 0;
+    v = Math.floor(127 * v / 12);
+    controls.pan = v;
+    drawMainWindow();
+    return;
+  }
+
+  // posbar
+  if (controls.posbarActive) {
+    let a = x - controls.posbarClickX - 17;
+    if (a < 0) a = 0;
+    if (a > 219) a = 219;
+    if (pressed && controls.position !== a) {
+      controls.position = a;
+      drawMainWindow();
+    }
+    return;
+  }
+
+  // titlebar
+  controls.menuButton = 5 <= x && x <= 17 && 3 <= y && y <= 13 && pressed;
+  controls.windowshadeButton = 254 <= x && x <= 262 && 3 <= y && y <= 12 && pressed;
+  controls.minimizeButton = 244 <= x && x <= 253 && 3 <= y && y <= 12 && pressed;
+  controls.closeButton = 264 <= x && x <= 272 && 3 <= y && y <= 12 && pressed;
+
+  // eqpl
+  controls.eqPressed = 219 <= x && x <= 242 && 58 <= y && y <= 70 && pressed;
+  controls.plPressed = 242 <= x && x <= 265 && 58 <= y && y <= 70 && pressed;
+
+  // buttonbar
+  if (15 <= x && x <= 130 && 87 <= y && y <= 106 && pressed) {
+    const which = 4 - (x < 107) - (x < 84) - (x < 60) - (x < 38);
+    controls.buttonPressed = which;
+  } else {
+    controls.buttonPressed = -1;
+  }
+
+  // eject
+  controls.ejectPressed = 136 <= x && x <= 158 && 89 <= y && y <= 105 && pressed;
+
+  // shufflerepeat
+  controls.shufflePressed = 165 <= x && x <= 209 && 90 <= y && y <= 102 && pressed;
+  controls.repeatPressed = 210 <= x && x <= 239 && 90 <= y && y <= 102 && pressed;
+
+  drawMainWindow();
+}
+
+function equalizerMouseMove(event) {
+
+}
+
+function playlistMouseMove(event) {
+  const canvas = plCanvas;
+  if (!canvas) {
+    return;
+  }
+  const pressed = (event.buttons & 0x01);
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  const buttonY = controls.playlistHeight - 30;
+
+  const fileButtonX = controls.playlistWidth - 44;
+  if (controls.playlistWhichCap === 'file') {
+    const newListButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        newListButtonY <= y && y <= newListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 2;
+    }
+    const saveListButtonY = buttonY - BUTTON_HEIGHT;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        saveListButtonY <= y && y <= saveListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 1;
+    }
+    const loadListButtonY = buttonY;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        loadListButtonY <= y && y <= loadListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 0;
+    }
+  }
+
+  const MISC_BUTTON_X = 101;
+  if (controls.playlistWhichCap === 'misc') {
+    const miscOptsButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        miscOptsButtonY <= y && y <= miscOptsButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 2;
+    }
+    const fileInfButtonY = buttonY - BUTTON_HEIGHT;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        fileInfButtonY <= y && y <= fileInfButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 1;
+    }
+    const sortListButtonY = buttonY;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        sortListButtonY <= y && y <= sortListButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 0;
+    }
+  }
+
+  const SEL_BUTTON_X = 72;
+  if (controls.playlistWhichCap === 'sel') {
+    const invSelButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        invSelButtonY <= y && y <= invSelButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 2;
+    }
+    const selZeroButtonY = buttonY - BUTTON_HEIGHT;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        selZeroButtonY <= y && y <= selZeroButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 1;
+    }
+    const selAllButtonY = buttonY;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        selAllButtonY <= y && y <= selAllButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 0;
+    }
+  }
+
+  const REM_BUTTON_X = 43;
+  if (controls.playlistWhichCap === 'rem') {
+    const remAllButtonY = buttonY - 3 * BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remAllButtonY <= y && y <= remAllButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 3;
+    }
+    const cropButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        cropButtonY <= y && y <= cropButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 2;
+    }
+    const remSelButtonY = buttonY - BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remSelButtonY <= y && y <= remSelButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 1;
+    }
+    const remMiscButtonY = buttonY;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remMiscButtonY <= y && y <= remMiscButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 0;
+    }
+  }
+
+  const ADD_BUTTON_X = 14;
+  if (controls.playlistWhichCap === 'add') {
+    const addUrlButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addUrlButtonY <= y && y <= addUrlButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 2;
+    }
+    const addDirButtonY = buttonY - BUTTON_HEIGHT;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addDirButtonY <= y && y <= addDirButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 1;
+    }
+    const addFileButtonY = buttonY;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addFileButtonY <= y && y <= addFileButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 0;
+    }
+  }
+
+  let top = 20;
+  let bottom = controls.playlistHeight - 38;
+  let numSongs = Math.floor((controls.playlistHeight - 60) / controls.fontHeight);
+  let xoffs = controls.playlistWidth - 15;
+  let w = 8;
+  if (xoffs <= x && x <= xoffs + w && top <= y && y <= bottom || controls.playlistWhichCap === 'vs') {
+    if (controls.playlistWhichCap === 'vs') {
+      console.log('vs', controls.playlistSlider);
+      let d, p;
+      controls.playlistSliderClickY = 9;
+      let a = controls.playlistSongs.length - numSongs;
+      if (a < 1) {
+        p = top;
+      } else {
+        p = top + ((controls.playlistHeight - 76) * controls.playlistSlider) / a;
+      }
+      d = Math.floor(((y - controls.playlistSliderClickY - top) * a)/(controls.playlistHeight - 76));
+      controls.playlistSlider = d;
+      if (controls.playlistSlider > a) {
+        controls.playlistSlider = a;
+      }
+    }
+  }
+
+  drawPlaylistWindow();
+}
+
+function onMouseMove(event) {
+  mainMouseMove(event);
+  equalizerMouseMove(event);
+  playlistMouseMove(event);
+}
+
+function mainMouseDown(event) {
+  const canvas = mainCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  if (x < 0 || x >= rect.width ||
+      y < 0 || y >= rect.height) {
+    controls.mainActive = false;
+    drawMainWindow();
+    return;
+  }
+  controls.mainActive = true;
+
+  // titlebar
+  if (5 <= x && x <= 17 && 3 <= y && y <= 13) {
+    controls.menuButton = 1;
+  }
+  if (3 <= y && y <= 12) {
+    if (254 <= x && x <= 262) {
+      controls.windowshadeButton = 1;
+    }
+
+    if (244 <= x && x <= 253) {
+      controls.minimizeButton = 1;
+    }
+
+    if (264 <= x && x <= 272) {
+      controls.closeButton = 1;
+    }
+  }
+
+  // clutterbar
+  let clutterbarEnable = 0;
+  if (11 <= x && x <= 19) {
+    if (24 <= y && y <= 31) {
+      clutterbarEnable = 1;
+      console.log('options');
+    }
+    if (32 <= y && y <= 39) {
+      clutterbarEnable = 2;
+      controls.clutterbarAlwaysOnTop = !controls.clutterbarAlwaysOnTop;
+      console.log('alwaysontop');
+    }
+    if (40 <= y && y <= 47) {
+      clutterbarEnable = 3;
+      console.log('info');
+    }
+    if (48 <= y && y <= 55) {
+      clutterbarEnable = 4;
+      controls.clutterbarDoubleSize = !controls.clutterbarDoubleSize;
+      console.log('doublesize');
+    }
+    if (56 <= y && y <= 62) {
+      clutterbarEnable = 5;
+      console.log('visualization');
+    }
+  }
+  if (9 <= x && x <= 19 && 20 <= y && y <= 65) {
+    drawClutterbar(clutterbarEnable + 1, true);
+  }
+
+  // volbar
+  if (107 <= x && x <= 175 && 58 <= y && y <= 66) {
+    controls.volbarPressed = true;
+    controls.volbarActive = 1;
+    const vs = 107 + Math.floor((controls.volume * 51) / 255);
+    if (x < vs + 15 && x >= vs) {
+      controls.volbarClickX = x - vs;
+    } else {
+      controls.volbarClickX = 7;
+    }
+  }
+  if (controls.volbarActive) {
+    let v = x - controls.volbarClickX - 107;
+    v = Math.floor((v * 255) / 51);
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    controls.volume = v;
+  }
+
+  // panbar
+  if (177 <= x && x <= 215 && 58 <= y && y <= 66) {
+    controls.panbarPressed = true;
+    controls.panbarActive = 1;
+    const vs = 189 + Math.floor(controls.pan * 12 / 127);
+    if (x < vs + 15 && x >= vs) {
+      controls.panbarClickX = x - vs;
+    } else {
+      controls.panbarClickX = 7;
+    }
+  }
+  if (controls.panbarActive) {
+    let v = x - controls.panbarClickX - 177;
+    if (v < 0) v = 0;
+    if (v > 24) v = 24;
+    v -= 12;
+    if (-2 < v && v < 2) v = 0;
+    v = Math.floor(127 * v / 12);
+    controls.pan = v;
+  }
+
+  // eqpl
+  if (58 <= y && y <= 70) {
+    if (219 <= x && x <= 242) {
+      controls.eqPressed = true;
+    }
+
+    if (242 <= x && x <= 265) {
+      controls.plPressed = true;
+    }
+  }
+
+  // posbar
+  if (18 <= x && x <= 263 && 73 <= y && y <= 81) {
+    controls.posbarPressed = true;
+    controls.posbarActive = 1;
+    if (controls.position - 1 <= (x - 17) && (x - 17) <= controls.position + 29) {
+      controls.posbarClickX = (x - 17) - controls.position;
+    } else {
+      controls.posbarClickX = 14;
+    }
+  }
+  if (controls.posbarActive) {
+    let a = x - controls.posbarClickX - 17;
+    if (a < 0) a = 0;
+    if (a > 218) a = 218;
+    if (controls.posbarPressed && controls.position !== a) {
+      controls.position = a;
+    }
+  }
+
+  // buttonbar
+  if (15 <= x && x <= 130 && 87 <= y && y <= 106) {
+    const which = 4 - (x < 107) - (x < 84) - (x < 60) - (x < 38);
+    controls.buttonPressed = which;
+  }
+
+  // eject
+  if (136 <= x && x <= 158 && 89 <= y && y <= 105) {
+    controls.ejectPressed = true;
+  }
+
+  // shufflerepeat
+  if (90 <= y && y <= 102) {
+    if (165 <= x && x <= 209) {
+      controls.shufflePressed = true;
+    }
+
+    if (210 <= x && x <= 239) {
+      controls.repeatPressed = true;
+    }
+  }
+
+  // icon
+  if (253 <= x && x <= 265 && 91 <= y && y <= 105) {
+    controls.logoPressed = true;
+  }
+
+  drawMainWindow();
+}
+
+function equalizerMouseDown(event) {
+  const canvas = eqCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  if (x < 0 || x >= rect.width ||
+      y < 0 || y >= rect.height) {
+    controls.eqActive = false;
+    drawEqualizerWindow();
+    return;
+  }
+  controls.eqActive = true;
+
+  drawEqualizerWindow();
+}
+
+function playlistMouseDown(event) {
+  const canvas = plCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  if (x < 0 || x >= rect.width ||
+      y < 0 || y >= rect.height) {
+    controls.playlistActive = false;
+    drawPlaylistWindow();
+    return;
+  }
+  controls.playlistActive = true;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  const buttonY = controls.playlistHeight - 30;
+  const lastWhichCap = controls.playlistWhichCap;
+
+  const fileButtonX = controls.playlistWidth - 44;
+  if (!lastWhichCap && !controls.playlistWhichCap &&
+      fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+      buttonY <= y && y <= buttonY + BUTTON_HEIGHT) {
+    controls.playlistWhichCap = 'file';
+  }
+
+  if (controls.playlistWhichCap === 'file' && lastWhichCap === 'file') {
+    controls.playlistWhichCap = null;
+    const newListButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        newListButtonY <= y && y <= newListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 2;
+      console.log('new list');
+    }
+    const saveListButtonY = buttonY - BUTTON_HEIGHT;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        saveListButtonY <= y && y <= saveListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 1;
+      console.log('save list');
+    }
+    const loadListButtonY = buttonY;
+    if (fileButtonX <= x && x <= fileButtonX + BUTTON_WIDTH &&
+        loadListButtonY <= y && y <= loadListButtonY + BUTTON_HEIGHT) {
+      controls.fileWhich = 0;
+      console.log('load list');
+    }
+  }
+
+  const MISC_BUTTON_X = 101;
+  if (!lastWhichCap && !controls.playlistWhichCap &&
+      MISC_BUTTON_X <= x && x <= 122 &&
+      buttonY <= y && y <= buttonY + BUTTON_HEIGHT) {
+    controls.playlistWhichCap = 'misc';
+  }
+
+  if (controls.playlistWhichCap === 'misc' && lastWhichCap === 'misc') {
+    controls.playlistWhichCap = null;
+    const miscOptsButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        miscOptsButtonY <= y && y <= miscOptsButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 2;
+      console.log('sort list');
+    }
+    const fileInfButtonY = buttonY - BUTTON_HEIGHT;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        fileInfButtonY <= y && y <= fileInfButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 1;
+      console.log('file inf');
+    }
+    const sortListButtonY = buttonY;
+    if (MISC_BUTTON_X <= x && x <= MISC_BUTTON_X + BUTTON_WIDTH &&
+        sortListButtonY <= y && y <= sortListButtonY + BUTTON_HEIGHT) {
+      controls.miscWhich = 0;
+      console.log('misc opts');
+    }
+  }
+
+  const SEL_BUTTON_X = 72;
+  if (!lastWhichCap && !controls.playlistWhichCap &&
+      SEL_BUTTON_X <= x && x <= 93 &&
+      buttonY <= y && y <= buttonY + BUTTON_HEIGHT) {
+    controls.playlistWhichCap = 'sel';
+  }
+
+  if (controls.playlistWhichCap === 'sel' && lastWhichCap === 'sel') {
+    controls.playlistWhichCap = null;
+    const invSelButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        invSelButtonY <= y && y <= invSelButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 2;
+      console.log('inv sel');
+    }
+    const selZeroButtonY = buttonY - BUTTON_HEIGHT;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        selZeroButtonY <= y && y <= selZeroButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 1;
+      console.log('sel zero');
+    }
+    const selAllButtonY = buttonY;
+    if (SEL_BUTTON_X <= x && x <= SEL_BUTTON_X + BUTTON_WIDTH &&
+        selAllButtonY <= y && y <= selAllButtonY + BUTTON_HEIGHT) {
+      controls.selWhich = 0;
+      console.log('sel all');
+    }
+  }
+
+  const REM_BUTTON_X = 43;
+  if (!lastWhichCap && !controls.playlistWhichCap &&
+      REM_BUTTON_X <= x && x <= 64 &&
+      buttonY <= y && y <= buttonY + BUTTON_HEIGHT) {
+    controls.playlistWhichCap = 'rem';
+  }
+
+  if (controls.playlistWhichCap === 'rem' && lastWhichCap === 'rem') {
+    controls.playlistWhichCap = null;
+    const remAllButtonY = buttonY - 3 * BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remAllButtonY <= y && y <= remAllButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 3;
+      console.log('rem misc');
+    }
+    const cropButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        cropButtonY <= y && y <= cropButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 2;
+      console.log('rem all');
+    }
+    const remSelButtonY = buttonY - BUTTON_HEIGHT;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remSelButtonY <= y && y <= remSelButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 1;
+      console.log('crop');
+    }
+    const remMiscButtonY = buttonY;
+    if (REM_BUTTON_X <= x && x <= REM_BUTTON_X + BUTTON_WIDTH &&
+        remMiscButtonY <= y && y <= remMiscButtonY + BUTTON_HEIGHT) {
+      controls.remWhich = 0;
+      console.log('rem sel');
+    }
+  }
+
+  const ADD_BUTTON_X = 14;
+  if (!lastWhichCap && !controls.playlistWhichCap &&
+      ADD_BUTTON_X <= x && x <= 35 &&
+      buttonY <= y && y <= buttonY + BUTTON_HEIGHT) {
+    controls.playlistWhichCap = 'add';
+  }
+
+  if (controls.playlistWhichCap === 'add' && lastWhichCap === 'add') {
+    controls.playlistWhichCap = null;
+    const addUrlButtonY = buttonY - 2 * BUTTON_HEIGHT;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addUrlButtonY <= y && y <= addUrlButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 2;
+      console.log('add url');
+    }
+    const addDirButtonY = buttonY - BUTTON_HEIGHT;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addDirButtonY <= y && y <= addDirButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 1;
+      console.log('add dir');
+    }
+    const addFileButtonY = buttonY;
+    if (ADD_BUTTON_X <= x && x <= ADD_BUTTON_X + BUTTON_WIDTH &&
+        addFileButtonY <= y && y <= addFileButtonY + BUTTON_HEIGHT) {
+      controls.addWhich = 0;
+      console.log('add file');
+    }
+  }
+
+  let top = 20;
+  let bottom = controls.playlistHeight - 38;
+  let numSongs = Math.floor((controls.playlistHeight - 60) / controls.fontHeight);
+  let xoffs = controls.playlistWidth - 15;
+  let w = 8;
+  if (xoffs <= x && x <= xoffs + w && top <= y && y <= bottom || controls.playlistWhichCap === 'vs') {
+    if (!controls.playlistWhichCap || controls.playlistWhichCap === 'vs') {
+      let d, p;
+      controls.playlistSliderClickY = 9;
+      let a = controls.playlistSongs.length - numSongs;
+      if (a < 1) {
+        p = top;
+      } else {
+        p = top + ((controls.playlistHeight - 76) * controls.playlistSlider) / a;
+      }
+      if (p <= y && y <= p + 20) {
+        controls.playlistSliderClickY = y - p - 1;
+      } else {
+        controls.playlistSliderClickY = 9;
+      }
+      d = Math.floor(((y - controls.playlistSliderClickY - top) * a)/(controls.playlistHeight - 76));
+      controls.playlistSlider = d;
+      if (controls.playlistSlider > a) {
+        controls.playlistSlider = a;
+      }
+      console.log('vs', controls.playlistWhichCap);
+      controls.playlistWhichCap = 'vs';
+    }
+  }
+
+  drawPlaylistWindow();
+}
+
+function onMouseDown(event) {
+  if (event.which !== 1) {
+    return;
+  }
+
+  mainMouseDown(event);
+  equalizerMouseDown(event);
+  playlistMouseDown(event);
+}
+
+function mainMouseUp(event) {
+  const canvas = mainCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  // titlebar
+  if (5 <= x && x <= 17 && 3 <= y && y <= 13) {
+    controls.menuButton = -1;
+    drawMainWindow();
+  }
+  if (3 <= y && y <= 12) {
+    if (254 <= x && x <= 262) {
+      if (controls.windowshadeButton) {
+        console.log('windowshade');
+      }
+      controls.windowshadeButton = -1;
+      drawMainWindow();
+    }
+
+    if (244 <= x && x <= 253) {
+      if (controls.minimizeButton) {
+        console.log('minimize');
+      }
+      controls.minimizeButton = -1;
+      drawMainWindow();
+    }
+
+    if (264 <= x && x <= 272) {
+      if (controls.closeButton) {
+        console.log('close');
+      }
+      controls.closeButton = -1;
+      drawMainWindow();
+    }
+  }
+
+  // volbar
+  if (controls.volbarPressed) {
+    controls.volbarPressed = false;
+    controls.volbarActive = 0;
+    controls.volbarClickX = null;
+    drawMainWindow();
+  }
+
+  // panbar
+  if (controls.panbarPressed) {
+    controls.panbarPressed = false;
+    controls.panbarActive = 0;
+    controls.panbarClickX = null;
+    drawMainWindow();
+  }
+
+  // eqpl
+  if (58 <= y && y <= 70) {
+    if (219 <= x && x <= 242) {
+      if (controls.eqPressed) {
+        controls.eqOn = !controls.eqOn;
+        console.log(`eq ${controls.eqOn ? 'on' : 'off'}`);
+      }
+      controls.eqPressed = false;
+      drawMainWindow();
+    }
+
+    if (242 <= x && x <= 265) {
+      if (controls.plPressed) {
+        controls.plOn = !controls.plOn;
+        console.log(`pl ${controls.plOn ? 'on' : 'off'}`);
+      }
+      controls.plPressed = false;
+      drawMainWindow();
+    }
+  }
+
+  // posbar
+  if (controls.posbarPressed) {
+    controls.posbarPressed = false;
+    controls.posbarActive = 0;
+    controls.posbarClickX = null;
+    drawMainWindow();
+  }
+
+  // buttonbar
+  if (15 <= x && x <= 130 && 87 <= y && y <= 106) {
+    if (controls.buttonPressed == 0) {
+      console.log('prev');
+    } else if (controls.buttonPressed == 1) {
+      console.log('play');
+    } else if (controls.buttonPressed == 2) {
+      console.log('pause');
+    } else if (controls.buttonPressed == 3) {
+      console.log('stop');
+    } else if (controls.buttonPressed == 4) {
+      console.log('next');
+    }
+    controls.buttonPressed = -1;
+    drawMainWindow();
+  }
+
+  // eject
+  if (136 <= x && x <= 158 && 89 <= y && y <= 105) {
+    if (controls.ejectPressed) {
+      console.log('eject');
+    }
+    controls.ejectPressed = false;
+    drawMainWindow();
+  }
+
+  // shufflerepeat
+  if (90 <= y && y <= 102) {
+    if (165 <= x && x <= 209) {
+      if (controls.shufflePressed) {
+        controls.shuffleOn = !controls.shuffleOn;
+        console.log(`shuffle ${controls.shuffleOn ? 'on' : 'off'}`);
+      }
+      controls.shufflePressed = false;
+      drawMainWindow();
+    }
+
+    if (210 <= x && x <= 239) {
+      if (controls.repeatPressed) {
+        controls.repeatOn = !controls.repeatOn;
+        console.log(`repeat ${controls.repeatOn ? 'on' : 'off'}`);
+      }
+      controls.repeatPressed = false;
+      drawMainWindow();
+    }
+  }
+
+  // logo
+  if (253 <= x && x <= 265 && 91 <= y && y <= 105) {
+    if (controls.logoPressed) {
+      console.log('logo');
+    }
+    controls.logoPressed = true;
+  }
+}
+
+function equalizerMouseUp(event) {
+  const canvas = eqCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+}
+
+function playlistMouseUp(event) {
+  const canvas = plCanvas;
+  if (!canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.pageX - rect.x;
+  const y = event.pageY - rect.y;
+
+  let top = 20;
+  let bottom = controls.playlistHeight - 38;
+  let numSongs = Math.floor((controls.playlistHeight - 60) / controls.fontHeight);
+  let xoffs = controls.playlistWidth - 15;
+  let w = 8;
+  if (xoffs <= x && x <= xoffs + w && top <= y && y <= bottom || controls.playlistWhichCap === 'vs') {
+    if (controls.playlistWhichCap === 'vs') {
+      controls.playlistSliderClickY = 9;
+      let a = controls.playlistSongs.length - numSongs;
+      let p = top;
+      if (a >= 1) {
+        p = top + ((controls.playlistHeight - 76) * controls.playlistSlider) / a;
+      }
+      let d = Math.floor(((y - controls.playlistSliderClickY - top) * a)/(controls.playlistHeight - 76));
+      controls.playlistSlider = d;
+      if (controls.playlistSlider > a) {
+        controls.playlistSlider = a;
+      }
+      controls.playlistWhichCap = null;
+    }
+  }
+}
+
+function onMouseUp(event) {
+  if (event.which !== 1) {
+    return;
+  }
+
+  mainMouseUp(event);
+  equalizerMouseUp(event);
+  playlistMouseUp(event);
+}
+
+function drawTitleBarButtons() {
+  const ctx = mainCanvasCtx;
+  if (!ctx) {
+    return;
+  }
+
+  // draw_tbuttons
+  const TB_BUTTON_WIDTH = 8;
+  const TB_BUTTON_HEIGHT = 8;
+  const TB_BUTTON_Y = 3;
+  const MENU_BUTTON_X = 6;
+  const MINIMIZE_BUTTON_X = 244;
+  const WINDOWSHADE_BUTTON_X = 254;
+  const CLOSE_BUTTON_X = 264;
+  if (controls.menuButton >= 0) {
+    const sy = 9 * controls.menuButton;
+    ctx.drawImage(titleBarBmpImg,
+                  /*sx=*/0, sy,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  MENU_BUTTON_X, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  }
+  if (controls.minimizeButton >= 0) {
+    const sy = 9 * controls.minimizeButton;
+    ctx.drawImage(titleBarBmpImg,
+                  /*sx=*/9, sy,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  MINIMIZE_BUTTON_X, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  }
+  if (controls.closeButton >= 0) {
+    const sy = 9 * controls.closeButton;
+    ctx.drawImage(titleBarBmpImg,
+                  /*sx=*/18, sy,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  CLOSE_BUTTON_X, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  }
+  if (controls.windowshadeButton >= 0) {
+    const sx = 9 * controls.windowshadeButton;
+    const sy = controls.windowshadeOn ? 27 : 18;
+    ctx.drawImage(titleBarBmpImg,
+                  sx, sy,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  WINDOWSHADE_BUTTON_X, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  }
+}
+
+function drawClutterbar(enable, mousedown) {
+  const ctx = mainCanvasCtx;
+  if (!ctx) {
+    return;
+  }
+
+  // draw_clutterbar
+  const CLUTTERBAR_X = 10;
+  const CLUTTERBAR_Y = 22;
+  const CLUTTERBAR_WIDTH = 8;
+  const CLUTTERBAR_HEIGHT = 43;
+  let clutterbarSourceX, clutterbarSourceY;
+  enable = 1;
+  if (enable === 0) {
+    clutterbarSourceX = 8;
+    clutterbarSourceY = 0;
+  } else if (enable === 1) {
+    clutterbarSourceX = 0;
+    clutterbarSourceY = 0;
+  } else {
+    clutterbarSourceX = (enable - 2) * 8;
+    clutterbarSourceY = 44;
+  }
+  ctx.drawImage(titleBarBmpImg,
+                304 + clutterbarSourceX, clutterbarSourceY,
+                CLUTTERBAR_WIDTH, CLUTTERBAR_HEIGHT,
+                CLUTTERBAR_X, CLUTTERBAR_Y,
+                CLUTTERBAR_WIDTH, CLUTTERBAR_HEIGHT);
+  if (enable !== 3) {
+    if (controls.clutterbarAlwaysOnTop) {
+      ctx.drawImage(titleBarBmpImg,
+                    /*sx=*/313, /*sy=*/55,
+                    CLUTTERBAR_WIDTH - 1, 8,
+                    CLUTTERBAR_X + 1, CLUTTERBAR_Y + 11,
+                    CLUTTERBAR_WIDTH - 1, 8);
+    } else {
+      ctx.drawImage(titleBarBmpImg,
+                    /*sx=*/305, /*sy=*/11,
+                    CLUTTERBAR_WIDTH - 1, 8,
+                    CLUTTERBAR_X + 1, CLUTTERBAR_Y + 11,
+                    CLUTTERBAR_WIDTH - 1, 8);
+    }
+  }
+  if (enable !== 5) {
+    if (controls.clutterbarDoubleSize) {
+      ctx.drawImage(titleBarBmpImg,
+                    /*sx=*/329, /*sy=*/71,
+                    CLUTTERBAR_WIDTH - 1, 6,
+                    CLUTTERBAR_X + 1, CLUTTERBAR_Y + 27,
+                    CLUTTERBAR_WIDTH - 1, 6);
+    } else {
+      ctx.drawImage(titleBarBmpImg,
+                    /*sx=*/305, /*sy=*/27,
+                    CLUTTERBAR_WIDTH - 1, 6,
+                    CLUTTERBAR_X + 1, CLUTTERBAR_Y + 27,
+                    CLUTTERBAR_WIDTH - 1, 6);
+    }
+  }
+}
+
+async function drawMainWindow() {
+  // From winamp/Src/Winamp/draw_main.cpp
+  // draw_clutterbar
+  // draw_shuffle - draws the shuffle toggle button
+  // draw_eject
+  // draw_eqplbut - draws the tiny EQ and PL buttons
+  // draw_repeat - draws the repeat toggle button
+  // draw_buttonbar - renders the main bottom transport playback buttons (previous, play, pause, stop, next) and highlights whichever one is clicked or hovered
+  // draw_volumebar - draws the volume slider and knob
+  // draw_panbar - draws the balance/panning slider track and slider knob
+  // draw_songname - draw scrolling track title using classic font
+  // draw_playicon - updates the tiny state indicator icon inside the status box
+  // draw_tbar - draw main window title bar background
+  // draw_monostereo - renders the MONO and STEREO indicator lights
+  // draw_bitmixrate - renders the audio stream statistics text panel
+  // draw_time - draw digital LCD time display numbers
+  // draw_positionbar - draws the song track seek progress bar and slider knob
+  // update_panning_text - updates the balanced percentage text string
+  // update_volume_text - updates the volume percentage text string
+  const canvas = mainCanvas;
+  const ctx = mainCanvasCtx;
+  const requiredResources = [mainBmpImg, titleBarBmpImg, playPauseBmpImg, numbersBmpImg, fontBmpImg, monoStereoBmpImg, volumeBmpImg, balanceBmpImg, shuffleRepeatBmpImg, posbarBmpImg, controlButtonsBmpImg];
+  if (!canvas || !ctx || requiredResources.some(r => !r)) {
+    return;
+  }
+
+  canvas.width = mainBmpImg.width;
+  canvas.height = mainBmpImg.height;
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(mainBmpImg, 0, 0);
+
+  // draw_tbar
+  const TB_X = 0;
+  const TB_Y = 0;
+  const WINDOW_WIDTH = 275;
+  const TB_HEIGHT = 14;
+  const titleBarSourceY = controls.mainActive ? (controls.windowshade ? 29 : 0) : (controls.windowshade ? 42 : 15);
+  ctx.drawImage(titleBarBmpImg,
+                /*sx=*/27, titleBarSourceY,
+                WINDOW_WIDTH, TB_HEIGHT,
+                TB_X, TB_Y,
+                WINDOW_WIDTH, TB_HEIGHT);
+
+  drawClutterbar(0, false);
+
+  // draw_playicon
+  const PLAYICON_X = 26;
+  const PLAYICON_Y = 28;
+  const PLAYICON_WIDTH = 9;
+  const PLAYICON_HEIGHT = 9;
+  let playIconSourceX = 0;
+  if (controls.playIcon === 0) playIconSourceX = 27;
+  if (controls.playIcon === 2) playIconSourceX = 18;
+  if (controls.playIcon === 4) playIconSourceX = 9;
+  ctx.drawImage(playPauseBmpImg,
+                playIconSourceX, /*sy=*/0,
+                PLAYICON_WIDTH, PLAYICON_HEIGHT,
+                PLAYICON_X, PLAYICON_Y,
+                PLAYICON_WIDTH, PLAYICON_HEIGHT);
+  if (controls.playIcon === 1 || controls.playIcon === 8) {
+    const sx = (controls.playIcon === 1) ? 36 : 39;
+    ctx.drawImage(playPauseBmpImg,
+                  sx, /*sy=*/0,
+                  /*sw=*/3, PLAYICON_HEIGHT,
+                  PLAYICON_X - 2, PLAYICON_Y,
+                  /*dw=*/3, PLAYICON_HEIGHT);
+  } else {
+    ctx.drawImage(playPauseBmpImg,
+                  /*sx=*/27, /*sy=*/0,
+                  /*sw=*/2, PLAYICON_HEIGHT,
+                  PLAYICON_X - 2, PLAYICON_Y,
+                  /*dw=*/2, PLAYICON_HEIGHT);
+  }
+
+  // draw_time
+  const MMM_X = 36;
+  const MM_X = 48;
+  const M_X = 60;
+  const SS_X = 78;
+  const S_X = 90;
+  const NUMBER_Y = 26;
+  const NUMBER_WIDTH = 9;
+  const NUMBER_HEIGHT = 13;
+  const mmm = Math.floor(controls.minutes / 100);
+  ctx.drawImage(numbersBmpImg,
+                /*sx=*/90, /*sy=*/0,
+                NUMBER_WIDTH, NUMBER_HEIGHT,
+                MMM_X, NUMBER_Y,
+                NUMBER_WIDTH, NUMBER_HEIGHT);
+  if (mmm > 0) {
+    ctx.drawImage(numbersBmpImg,
+                  /*sx=*/mmm * 9, /*sy=*/0,
+                  NUMBER_WIDTH, NUMBER_HEIGHT,
+                  MMM_X, NUMBER_Y,
+                  NUMBER_WIDTH, NUMBER_HEIGHT);
+  }
+  const mm = Math.floor(controls.minutes / 10) % 10;
+  ctx.drawImage(numbersBmpImg,
+                /*sx=*/mm * 9, /*sy=*/0,
+                NUMBER_WIDTH, NUMBER_HEIGHT,
+                MM_X, NUMBER_Y,
+                NUMBER_WIDTH, NUMBER_HEIGHT);
+  const m = controls.minutes % 10;
+  ctx.drawImage(numbersBmpImg,
+                /*sx=*/m * 9, /*sy=*/0,
+                NUMBER_WIDTH, NUMBER_HEIGHT,
+                M_X, NUMBER_Y,
+                NUMBER_WIDTH, NUMBER_HEIGHT);
+  const ss = Math.floor(controls.seconds / 10);
+  ctx.drawImage(numbersBmpImg,
+                /*sx=*/ss * 9, /*sy=*/0,
+                NUMBER_WIDTH, NUMBER_HEIGHT,
+                SS_X, NUMBER_Y,
+                NUMBER_WIDTH, NUMBER_HEIGHT);
+  const s = controls.seconds % 10;
+  ctx.drawImage(numbersBmpImg,
+                /*sx=*/s * 9, /*sy=*/0,
+                NUMBER_WIDTH, NUMBER_HEIGHT,
+                S_X, NUMBER_Y,
+                NUMBER_WIDTH, NUMBER_HEIGHT);
+
+  // draw_songname
+  const NAME_X = 111;
+  const NAME_Y = 25;
+  const NAME_WIDTH = 153;
+  const NAME_HEIGHT = 10;
+  const FONT_HEIGHT = 6;
+  ctx.fillStyle = 'black';
+  ctx.fillRect(NAME_X, NAME_Y, NAME_WIDTH, NAME_HEIGHT);
+  let charX = NAME_X;
+  let charIndex = 0;
+  const getXYFromChar = (ic) => {
+    let c = 0;
+    let c2 = 0;
+    switch (ic)
+    {
+      case '°': ic = '0'; break;
+      case 'Ç': ic = 'C'; break;
+      case 'ü': ic = 'u'; break;
+      case 'è': case 'ë': case 'ê': case 'é': ic = 'e'; break;
+      case 'á': case 'à': case 'â': ic = 'a'; break;
+      case 'ç': ic = 'c'; break;
+      case 'í': case 'ì': case 'î': case 'ï': ic = 'i'; break;
+      case 'É': ic = 'E'; break;
+      case 'æ': ic = 'a'; break;
+      case 'Æ': ic = 'A'; break;
+      case 'ó': case 'ò': case 'ô': ic = 'o'; break;
+      case 'ú': case 'ù': case 'û': ic = 'u'; break;
+      case 'ÿ': ic = 'y'; break;
+      case 'Ü': ic = 'U'; break;
+      case '': ic = 'f'; break;
+      case 'Ñ': case 'ñ': ic = 'n'; break;
+      default: break;
+    } // quick relocations
+    if (ic <= 'Z' && ic >= 'A') c = (ic.charCodeAt(0)-'A'.charCodeAt(0));
+    else if (ic <= 'z' && ic >= 'a') c = (ic.charCodeAt(0)-'a'.charCodeAt(0));
+    else
+    {
+      c2 = 6;
+      if (ic == '\1') c=10;
+      else if (ic == '.') c = 11;
+        else if (ic <= '9' && ic >= '0') c = ic - '0';
+        else if (ic == ':') c = 12;
+      else if (ic == '(') c = 13;
+        else if (ic == ')') c = 14;
+      else if (ic == '-') c = 15;
+      else if (ic == '\'' || ic=='`') c = 16;
+      else if (ic == '!') c = 17;
+      else if (ic == '_') c = 18;
+      else if (ic == '+') c = 19;
+      else if (ic == '\\') c = 20;
+      else if (ic == '/') c = 21;
+      else if (ic == '[' || ic == '{' || ic == '<') c = 22;
+      else if (ic == ']' || ic == '}' || ic == '>') c = 23;
+      else if (ic == '~' || ic == '^') c = 24;
+      else if (ic == '&') c = 25;
+      else if (ic == '%') c = 26;
+      else if (ic == ',') c = 27;
+      else if (ic == '=') c = 28;
+      else if (ic == '$') c = 29;
+      else if (ic == '#') c = 30;
+      else 
+      {
+        c2=12;
+        if (ic == 'Å' || ic == 'å') c = 0;
+        else if (ic == 'Ö' || ic == 'ö') c = 1;
+        else if (ic == 'Ä' || ic == 'ä') c = 2;
+        else if (ic == '?') c = 3;
+        else if (ic == '*') c = 4;
+        else
+        {
+          c2 = 0;
+          if (ic == '"') c = 26;
+          else if (ic == '@') c = 27;
+          else c = 30;
+        }
+      }
+    }
+    c*=5;
+    return {x:c, y:c2}
+  };
+  let offset = controls.nameOffsetInFirst;
+  const name = controls.name.slice(controls.nameStartPos);
+  while (charX < 265 && charIndex < name.length) {
+    const {x, y} = getXYFromChar(name[charIndex++]);
+    if (charX >= 265 - 5) {
+      ctx.drawImage(fontBmpImg,
+                    x, y,
+                    265 - charX, FONT_HEIGHT,
+                    charX, NAME_Y + 2,
+                    265 - charX, FONT_HEIGHT);
+      charX = 265;
+    } else {
+      ctx.drawImage(fontBmpImg,
+                    x + offset, y,
+                    5 - offset, FONT_HEIGHT,
+                    charX, NAME_Y + 2,
+                    5 - offset, FONT_HEIGHT);
+      charX += 5 - offset;
+      offset = 0;
+    }
+  }
+  while (charX < 265) {
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/4, /*sy=*/0,
+                  1, FONT_HEIGHT,
+                  charX++, 27,
+                  1, FONT_HEIGHT);
+  }
+
+  // draw_bitmixrate
+  const BITRATE_X = 111;
+  const BITRATE_MIXRATE_Y = 43;
+  const BITRATE_WIDTH = 5;
+  if (controls.bitrate >= 10000) {
+    if (controls.bitrate >= 100000) {
+      const bbbbbb = Math.floor(controls.bitrate / 100000) % 10;
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/5 * bbbbbb, /*sy=*/6,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    } else {
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/100, /*sy=*/12,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    }
+    const bbbbb = Math.floor(controls.bitrate / 10000) % 10;
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/5 * bbbbb, /*sy=*/6,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X + 5, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+    const {x, y} = getXYFromChar('C');
+    ctx.drawImage(fontBmpImg,
+                  x, y,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X + 10, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+  } else if (controls.bitrate >= 1000) {
+    const bbbb = Math.floor(controls.bitrate / 1000) % 10;
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/5 * bbbb, /*sy=*/6,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+    const bbb = Math.floor(controls.bitrate / 100) % 10;
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/5 * bbb, /*sy=*/6,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X + 5, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+    const {x, y} = getXYFromChar('H');
+    ctx.drawImage(fontBmpImg,
+                  x, y,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X + 10, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+  } else {
+    if (controls.bitrate >= 100) {
+      const bbb = Math.floor(controls.bitrate / 100) % 10;
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/5 * bbb, /*sy=*/6,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    } else {
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/100, /*sy=*/12,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    }
+    if (controls.bitrate >= 10) {
+      const bb = Math.floor(controls.bitrate / 10) % 10;
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/5 * bb, /*sy=*/6,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X + 5, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    } else {
+      ctx.drawImage(fontBmpImg,
+                    /*sx=*/100, /*sy=*/12,
+                    /*sw=*/5, FONT_HEIGHT,
+                    BITRATE_X + 5, BITRATE_MIXRATE_Y,
+                    /*dw=*/5, FONT_HEIGHT);
+    }
+    const b = controls.bitrate % 10;
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/5 * b, /*sy=*/6,
+                  /*sw=*/5, FONT_HEIGHT,
+                  BITRATE_X + 10, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+  }
+
+  const MIXRATE_X = 156;
+  if (controls.mixrate > 10) {
+    const mm = Math.floor(controls.mixrate / 10) % 10;
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/5 * mm, /*sy=*/6,
+                  /*sw=*/5, FONT_HEIGHT,
+                  MIXRATE_X, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+  } else {
+    ctx.drawImage(fontBmpImg,
+                  /*sx=*/100, /*sy=*/12,
+                  /*sw=*/5, FONT_HEIGHT,
+                  MIXRATE_X, BITRATE_MIXRATE_Y,
+                  /*dw=*/5, FONT_HEIGHT);
+  }
+  ctx.drawImage(fontBmpImg,
+                /*sx=*/5 * (controls.mixrate % 10), /*sy=*/6,
+                /*sw=*/5, FONT_HEIGHT,
+                MIXRATE_X + 5, BITRATE_MIXRATE_Y,
+                /*dw=*/5, FONT_HEIGHT);
+
+  // draw_monostereo
+  const MONO_X = 212;
+  const STEREO_X = 239;
+  const MONO_STEREO_Y = 41;
+  const MONO_WIDTH = 28;
+  const STEREO_WIDTH = 29;
+  const MONO_STEREO_HEIGHT = 12;
+  const monoSourceY = (controls.stereo == 1) ? 0 : 12;
+  const stereoSourceY = (controls.stereo == 2) ? 0 : 12;
+  ctx.drawImage(monoStereoBmpImg,
+                /*sx=*/29, monoSourceY,
+                MONO_WIDTH, MONO_STEREO_HEIGHT,
+                MONO_X, MONO_STEREO_Y,
+                MONO_WIDTH, MONO_STEREO_HEIGHT);
+  ctx.drawImage(monoStereoBmpImg,
+                /*sx=*/0, stereoSourceY,
+                STEREO_WIDTH, MONO_STEREO_HEIGHT,
+                STEREO_X, MONO_STEREO_Y,
+                STEREO_WIDTH, MONO_STEREO_HEIGHT);
+
+  // draw_volumebar
+  const VOLBAR_HEIGHT = 14;
+  const VOLBAR_X = 107;
+  const VOLBAR_Y = 57;
+  const VOLBAR_WIDTH = 68;
+  const VOLBAR_SLIDER_WIDTH = 14;
+  const VOLBAR_LENGTH = VOLBAR_WIDTH - VOLBAR_SLIDER_WIDTH;
+  const VOLBAR_SLIDER_HEIGHT = 13;
+  const volbarSourceY = Math.floor((controls.volume * 27) / 255) * 15;
+  const volbarX = VOLBAR_X + Math.floor((controls.volume * 51) / 255);
+  ctx.drawImage(volumeBmpImg,
+                /*sx=*/0, volbarSourceY,
+                VOLBAR_WIDTH, VOLBAR_HEIGHT,
+                VOLBAR_X, VOLBAR_Y,
+                VOLBAR_WIDTH, VOLBAR_HEIGHT);
+  const volumeKnobSourceX = controls.volbarPressed ? 0 : 15;
+  ctx.drawImage(volumeBmpImg,
+                volumeKnobSourceX, /*sy=*/422,
+                VOLBAR_SLIDER_WIDTH, VOLBAR_SLIDER_HEIGHT,
+                volbarX, VOLBAR_Y + 1,
+                VOLBAR_SLIDER_WIDTH, VOLBAR_SLIDER_HEIGHT);
+
+  // draw_panbar
+  const PANBAR_HEIGHT = 14;
+  const PANBAR_X = 177;
+  const PANBAR_Y = 57;
+  const PANBAR_WIDTH = 38;
+  const PANBAR_SLIDER_WIDTH = 14;
+  const PANBAR_LENGTH = PANBAR_WIDTH - PANBAR_SLIDER_WIDTH;
+  const PANBAR_SLIDER_HEIGHT = 13;
+  const panbarSourceY = Math.floor(Math.abs(controls.pan) * 27 / 127) * 15;
+  ctx.drawImage(balanceBmpImg,
+                /*sx=*/9, panbarSourceY,
+                PANBAR_WIDTH, PANBAR_HEIGHT,
+                PANBAR_X, PANBAR_Y,
+                PANBAR_WIDTH, PANBAR_HEIGHT);
+  const panbarKnobSourceX = controls.panbarPressed ? 0 : 15;
+  const panbarKnobX = PANBAR_X + (controls.pan * 12) / 127 + 12;
+  ctx.drawImage(balanceBmpImg,
+                panbarKnobSourceX, /*sy=*/422,
+                PANBAR_SLIDER_WIDTH, PANBAR_SLIDER_HEIGHT,
+                panbarKnobX, PANBAR_Y + 1,
+                PANBAR_SLIDER_WIDTH, PANBAR_SLIDER_HEIGHT);
+
+  // draw_eqplbut
+  const EQ_BUTTON_X = 219
+  const PL_BUTTON_X = 242
+  const EQ_PL_BUTTON_Y = 58
+  const EQ_PL_BUTTON_WIDTH = 23
+  const EQ_PL_BUTTON_HEIGHT = 12
+  const eqButtonSourceX = controls.eqPressed ? 46 : 0;
+  const eqButtonSourceY = controls.eqOn ? 73 : 61;
+  const plButtonSourceX = controls.plPressed ? 69 : 23;
+  const plButtonSourceY = controls.plOn ? 73 : 61;
+  ctx.drawImage(shuffleRepeatBmpImg,
+                eqButtonSourceX, eqButtonSourceY,
+                EQ_PL_BUTTON_WIDTH, EQ_PL_BUTTON_HEIGHT,
+                EQ_BUTTON_X, EQ_PL_BUTTON_Y,
+                EQ_PL_BUTTON_WIDTH, EQ_PL_BUTTON_HEIGHT);
+  ctx.drawImage(shuffleRepeatBmpImg,
+                plButtonSourceX, plButtonSourceY,
+                EQ_PL_BUTTON_WIDTH, EQ_PL_BUTTON_HEIGHT,
+                PL_BUTTON_X, EQ_PL_BUTTON_Y,
+                EQ_PL_BUTTON_WIDTH, EQ_PL_BUTTON_HEIGHT);
+
+  // draw_positionbar
+  const POSBAR_X = 16;
+  const POSBAR_Y = 72;
+  const POSBAR_WIDTH = 248;
+  const POSBAR_HEIGHT = 10;
+  const POSBAR_KNOB_WIDTH = 29;
+  const POSBAR_LENGTH = POSBAR_WIDTH - POSBAR_KNOB_WIDTH;
+  if (controls.position) {
+    ctx.drawImage(posbarBmpImg,
+                  /*sx=*/0, /*sy=*/0,
+                  POSBAR_WIDTH, POSBAR_HEIGHT,
+                  POSBAR_X, POSBAR_Y,
+                  POSBAR_WIDTH, POSBAR_HEIGHT);
+  }
+  ctx.drawImage(posbarBmpImg,
+                controls.posbarPressed ? 278 : 248, /*sy=*/0,
+                POSBAR_KNOB_WIDTH, POSBAR_HEIGHT,
+                POSBAR_X + controls.position, POSBAR_Y,
+                POSBAR_KNOB_WIDTH, POSBAR_HEIGHT);
+  if (controls.position != POSBAR_LENGTH) {
+    ctx.drawImage(posbarBmpImg,
+                  controls.position + POSBAR_KNOB_WIDTH, /*sy=*/0,
+                  POSBAR_LENGTH - controls.position, POSBAR_HEIGHT,
+                  POSBAR_X + controls.position + POSBAR_KNOB_WIDTH, POSBAR_Y,
+                  POSBAR_LENGTH - controls.position, POSBAR_HEIGHT);
+  }
+
+  // draw_buttonbar
+  const BUTTON_BAR_X = 16;
+  const BUTTON_BAR_Y = 88;
+  const BUTTON_BAR_WIDTH = 114;
+  const BUTTON_BAR_HEIGHT = 18;
+  const BUTTON_WIDTH = 23;
+  const d1 = [0, 23, 46, 69, 92];
+  const d2 = [23, 46, 69, 92, 114];
+
+  if (controls.buttonPressed == -1) {
+    ctx.drawImage(controlButtonsBmpImg,
+                  /*sx=*/0, /*sy=*/0,
+                  BUTTON_BAR_WIDTH, BUTTON_BAR_HEIGHT,
+                  BUTTON_BAR_X, BUTTON_BAR_Y,
+                  BUTTON_BAR_WIDTH, BUTTON_BAR_HEIGHT);
+  } else {
+    const leftX = d1[controls.buttonPressed];
+    const rightX = d2[controls.buttonPressed];
+    if (controls.buttonPressed != 0) {
+      ctx.drawImage(controlButtonsBmpImg,
+                    /*sx=*/0, /*sy=*/0,
+                    leftX, BUTTON_BAR_HEIGHT,
+                    BUTTON_BAR_X, BUTTON_BAR_Y,
+                    leftX, BUTTON_BAR_HEIGHT);
+    }
+    ctx.drawImage(controlButtonsBmpImg,
+                  leftX, /*sy=*/18,
+                  rightX - leftX, BUTTON_BAR_HEIGHT,
+                  BUTTON_BAR_X + leftX, BUTTON_BAR_Y,
+                  rightX - leftX, BUTTON_BAR_HEIGHT);
+    if (controls.buttonPressed != 4) {
+      ctx.drawImage(controlButtonsBmpImg,
+                    rightX, /*sy=*/0,
+                    BUTTON_BAR_WIDTH - rightX, BUTTON_BAR_HEIGHT,
+                    BUTTON_BAR_X + rightX, BUTTON_BAR_Y,
+                    BUTTON_BAR_WIDTH - rightX, BUTTON_BAR_HEIGHT);
+    }
+  }
+
+  // draw_eject
+  const EJECT_X = 136;
+  const EJECT_Y = 89;
+  const EJECT_WIDTH = 22;
+  const EJECT_HEIGHT = 16;
+  const ejectSourceY = controls.ejectPressed ? 16 : 0;
+  ctx.drawImage(controlButtonsBmpImg,
+                /*sx=*/114, ejectSourceY,
+                EJECT_WIDTH, EJECT_HEIGHT,
+                EJECT_X, EJECT_Y,
+                EJECT_WIDTH, EJECT_HEIGHT);
+
+  // draw_shuffle
+  const SHUFFLE_X = 164;
+  const SHUFFLE_Y = 89;
+  const SHUFFLE_WIDTH = 47;
+  const SHUFFLE_HEIGHT = 15;
+  const shuffleSourceY = controls.shuffleOn ? (controls.shufflePressed ? 45 : 30) : (controls.shufflePressed ? 15 : 0);
+  ctx.drawImage(shuffleRepeatBmpImg,
+                /*sx=*/28, shuffleSourceY,
+                SHUFFLE_WIDTH, SHUFFLE_HEIGHT,
+                SHUFFLE_X, SHUFFLE_Y,
+                SHUFFLE_WIDTH, SHUFFLE_HEIGHT);
+
+  // draw_repeat
+  const REPEAT_X = 210;
+  const REPEAT_Y = 89;
+  const REPEAT_WIDTH = 28;
+  const REPEAT_HEIGHT = 15;
+  const repeatSourceY = controls.repeatOn ? (controls.repeatPressed ? 45 : 30) : (controls.repeatPressed ? 15 : 0);
+  ctx.drawImage(shuffleRepeatBmpImg,
+                /*sx=*/0, repeatSourceY,
+                REPEAT_WIDTH, REPEAT_HEIGHT,
+                REPEAT_X, REPEAT_Y,
+                REPEAT_WIDTH, REPEAT_HEIGHT);
+}
+
+function drawEqualizerWindow() {
+  // draw_eq_slid
+  // draw_eq_graphthingy
+  // draw_eq_onauto
+  // draw_eq_presets
+
+  const canvas = eqCanvas;
+  const ctx = eqCanvasCtx;
+  const requiredResources = [eqMainBmpImg, eqExBmpImg];
+  if (!canvas || !ctx || requiredResources.some(r => !r)) {
+    return;
+  }
+
+  const WINDOW_WIDTH = 275;
+  const WINDOW_HEIGHT = 116;
+  canvas.width = WINDOW_WIDTH;
+  canvas.height = WINDOW_HEIGHT;
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(eqMainBmpImg,
+                /*sx=*/0, /*sy=*/0,
+                WINDOW_WIDTH, WINDOW_HEIGHT,
+                /*dx=*/0, /*dy=*/0,
+                WINDOW_WIDTH, WINDOW_HEIGHT);
+
+  // draw_eq_tbar
+  const TB_HEIGHT = 14;
+  const titleBarSourceY = controls.eqActive ? 134 : 149;
+  ctx.drawImage(eqMainBmpImg,
+                /*sx=*/0, titleBarSourceY,
+                WINDOW_WIDTH, TB_HEIGHT,
+                /*dx=*/0, /*dy=*/0,
+                WINDOW_WIDTH, TB_HEIGHT);
+}
+
+function drawMiscButtons() {
+  const ctx = plCanvasCtx;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/200, /*sy=*/111,
+                /*sw=*/3, BUTTON_HEIGHT * 3,
+                98, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                /*sw=*/3, BUTTON_HEIGHT * 3);
+  ctx.drawImage(plEditBmpImg,
+                (controls.miscWhich === 2) ? 177 : 154, /*sy=*/111,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                101, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.miscWhich === 1) ? 177 : 154, /*sy=*/130,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                101, controls.playlistHeight - 30 - BUTTON_HEIGHT,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.miscWhich === 0) ? 177 : 154, /*sy=*/149,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                101, controls.playlistHeight - 30,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+}
+
+function drawSelButtons() {
+  const ctx = plCanvasCtx;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/150, /*sy=*/111,
+                /*sw=*/3, BUTTON_HEIGHT * 3,
+                69, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                /*sw=*/3, BUTTON_HEIGHT * 3);
+  ctx.drawImage(plEditBmpImg,
+                (controls.selWhich === 2) ? 127 : 104, /*sy=*/111,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                72, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.selWhich === 1) ? 127 : 104, /*sy=*/130,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                72, controls.playlistHeight - 30 - BUTTON_HEIGHT,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.selWhich === 0) ? 127 : 104, /*sy=*/149,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                72, controls.playlistHeight - 30,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+}
+
+function drawRemButtons() {
+  const ctx = plCanvasCtx;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/100, /*sy=*/111,
+                /*sw=*/3, BUTTON_HEIGHT * 4,
+                40, controls.playlistHeight - 30 - BUTTON_HEIGHT * 3,
+                /*sw=*/3, BUTTON_HEIGHT * 4);
+  ctx.drawImage(plEditBmpImg,
+                (controls.remWhich === 3) ? 77 : 54, /*sy=*/168,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                43, controls.playlistHeight - 30 - BUTTON_HEIGHT * 3,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.remWhich === 2) ? 77 : 54, /*sy=*/111,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                43, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.remWhich === 1) ? 77 : 54, /*sy=*/130,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                43, controls.playlistHeight - 30 - BUTTON_HEIGHT,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.remWhich === 0) ? 77 : 54, /*sy=*/149,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                43, controls.playlistHeight - 30,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+}
+
+function drawAddButtons() {
+  const ctx = plCanvasCtx;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/48, /*sy=*/111,
+                /*sw=*/3, BUTTON_HEIGHT * 3,
+                11, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                /*sw=*/3, BUTTON_HEIGHT * 3);
+  ctx.drawImage(plEditBmpImg,
+                (controls.addWhich === 2) ? 23 : 0, /*sy=*/111,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                14, controls.playlistHeight - 30 - BUTTON_HEIGHT * 2,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.addWhich === 1) ? 23 : 0, /*sy=*/130,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                14, controls.playlistHeight - 30 - BUTTON_HEIGHT,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.addWhich === 0) ? 23 : 0, /*sy=*/149,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                14, controls.playlistHeight - 30,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+
+}
+
+function drawListOptsButtons() {
+  const ctx = plCanvasCtx;
+
+  const BUTTON_WIDTH = 22;
+  const BUTTON_HEIGHT = 18;
+  const BORDER_WIDTH = 3;
+  const listOptsX = controls.playlistWidth - 44;
+  const listOptsY = controls.playlistHeight - 30;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/250, /*sy=*/111,
+                BORDER_WIDTH, BUTTON_HEIGHT * 3,
+                listOptsX - BORDER_WIDTH, listOptsY - BUTTON_HEIGHT * 2,
+                BORDER_WIDTH, BUTTON_HEIGHT * 3);
+  ctx.drawImage(plEditBmpImg,
+                (controls.fileWhich === 2) ? 227 : 204, /*sy=*/111,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                listOptsX, listOptsY - BUTTON_HEIGHT * 2,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.fileWhich === 1) ? 227 : 204, /*sy=*/130,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                listOptsX, listOptsY - BUTTON_HEIGHT,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+  ctx.drawImage(plEditBmpImg,
+                (controls.fileWhich === 0) ? 227 : 204, /*sy=*/149,
+                BUTTON_WIDTH, BUTTON_HEIGHT,
+                listOptsX, listOptsY,
+                BUTTON_WIDTH, BUTTON_HEIGHT);
+}
+
+function drawPlaylistWindow() {
+  const canvas = plCanvas;
+  const ctx = plCanvasCtx;
+  const requiredResources = [plEditBmpImg];
+  if (!canvas || !ctx || requiredResources.some(r => !r)) {
+    return;
+  }
+
+  // draw_pe_infostr
+  // draw_pe_vslide - draw vertical scrollbar knob
+  // draw_pe_song
+  // draw_pe_timedisp - draw time display
+  // draw_pl2 - update song, scrollbar, time display, info string
+  // do_mb
+  // do_timedisplay
+  // do_filebut
+  // do_miscbut
+  // do_selbut
+  // do_addbut
+  // do_rembut
+  // do_vsb
+  // do_lb
+  // do_vscroll
+  // do_titlebuttons
+  // do_size
+  // do_titlebar
+
+  // draw_pe_tbar
+  const PLAYLIST_X = 0;
+  const PLAYLIST_Y = 0;
+  const PLAYLIST_WIDTH_INCREMENT = 25;
+  const TB_LEFT_HALF_WIDTH_INCREMENT = 12;
+  const TB_RIGHT_HALF_WIDTH_INCREMENT = PLAYLIST_WIDTH_INCREMENT - TB_LEFT_HALF_WIDTH_INCREMENT;
+  const TB_TITLE_WIDTH = 100;
+  const TB_HEIGHT = 20;
+  const titleBarSourceY = controls.playlistActive ? 0 : 21;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/0, titleBarSourceY,
+                PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT,
+                PLAYLIST_X, PLAYLIST_Y,
+                PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT)
+  let dx = PLAYLIST_X + PLAYLIST_WIDTH_INCREMENT;
+  let nt = Math.floor((controls.playlistWidth - 150) / PLAYLIST_WIDTH_INCREMENT);
+  if (nt) {
+    if (nt & 1) {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx*/127, titleBarSourceY,
+                    TB_LEFT_HALF_WIDTH_INCREMENT, TB_HEIGHT,
+                    dx, PLAYLIST_Y,
+                    TB_LEFT_HALF_WIDTH_INCREMENT, TB_HEIGHT);
+      dx += TB_LEFT_HALF_WIDTH_INCREMENT;
+    }
+    nt = Math.floor(nt / 2);
+    while (nt-- > 0) {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx=*/127, titleBarSourceY,
+                    PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT,
+                    dx, PLAYLIST_Y,
+                    PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT);
+      dx += PLAYLIST_WIDTH_INCREMENT;
+    }
+  }
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/26, titleBarSourceY,
+                TB_TITLE_WIDTH, TB_HEIGHT,
+                dx, PLAYLIST_Y,
+                TB_TITLE_WIDTH, TB_HEIGHT);
+  dx += TB_TITLE_WIDTH;
+  const playlistWidthIncrements = Math.floor((controls.playlistWidth - 150) / PLAYLIST_WIDTH_INCREMENT);
+  if (playlistWidthIncrements) {
+    let nt = playlistWidthIncrements;
+    if (nt & 1) {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx*/127, titleBarSourceY,
+                    TB_RIGHT_HALF_WIDTH_INCREMENT, TB_HEIGHT,
+                    dx, PLAYLIST_Y,
+                    TB_RIGHT_HALF_WIDTH_INCREMENT, TB_HEIGHT);
+      dx += TB_RIGHT_HALF_WIDTH_INCREMENT;
+    }
+    nt = Math.floor(nt / 2);
+    while (nt-- > 0) {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx=*/127, titleBarSourceY,
+                    PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT,
+                    dx, PLAYLIST_Y,
+                    PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT);
+      dx += PLAYLIST_WIDTH_INCREMENT;
+    }
+  }
+  const partialTitleBarWidth = (controls.playlistWidth - 150) % 25;
+  if (partialTitleBarWidth) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/127, titleBarSourceY,
+                  /*sw=*/25, TB_HEIGHT,
+                  dx, PLAYLIST_Y,
+                  partialTitleBarWidth, TB_HEIGHT)
+    dx += partialTitleBarWidth;
+  }
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/153, titleBarSourceY,
+                PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT,
+                dx, PLAYLIST_Y,
+                PLAYLIST_WIDTH_INCREMENT, TB_HEIGHT);
+
+  // draw_pe_tbutton
+  const TB_BUTTON_Y = 3;
+  const TB_BUTTON_WIDTH = 9;
+  const TB_BUTTON_HEIGHT = 9;
+  const closeX = controls.playlistWidth - 11;
+  const windowshadeX = controls.playlistWidth - 20;
+  if (controls.playlistCloseButtonPressed) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/52, /*sy=*/42,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  closeX, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  } else {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/167, /*sy=*/3,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  closeX, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  }
+
+  if (controls.playlistWindowshadeButtonPressed) {
+    ctx.drawImage(plEditBmpImg,
+                  controls.playlistWindowshade ? 150 : 62, /*sy=*/42,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                  windowshadeX, TB_BUTTON_Y,
+                  TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+  } else {
+    if (controls.playlistWindowshade) {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx=*/128, /*sy=*/45,
+                    TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                    windowshadeX, TB_BUTTON_Y,
+                    TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+    } else {
+      ctx.drawImage(plEditBmpImg,
+                    /*sx=*/158, /*sy=*/3,
+                    TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT,
+                    windowshadeX, TB_BUTTON_Y,
+                    TB_BUTTON_WIDTH, TB_BUTTON_HEIGHT);
+    }
+  }
+
+  // draw_pl
+  const PLAYLIST_HEIGHT_INCREMENT = 29;
+  const PLAYLIST_LEFT_BORDER_WIDTH = 12;
+  const PLAYLIST_SCROLL_BORDER_WIDTH = 5;
+  const PLAYLIST_RIGHT_BORDER_WIDTH = 7;
+  const playlistHeightIncrements = Math.floor((controls.playlistHeight - 58) / PLAYLIST_HEIGHT_INCREMENT);
+  let y = playlistHeightIncrements;
+  let dy = PLAYLIST_Y + TB_HEIGHT;
+  while (y-- > 0) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/0, /*sy=*/42,
+                  PLAYLIST_LEFT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X, dy,
+                  PLAYLIST_LEFT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT);
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/31, /*sy=*/42,
+                  PLAYLIST_SCROLL_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X + controls.playlistWidth - 20, dy,
+                  PLAYLIST_SCROLL_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT);
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/44, /*sy=*/42,
+                  PLAYLIST_RIGHT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X + controls.playlistWidth - PLAYLIST_RIGHT_BORDER_WIDTH, dy,
+                  PLAYLIST_RIGHT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT);
+    dy += 29;
+  }
+  const partialHeight = (controls.playlistHeight - 58) % PLAYLIST_HEIGHT_INCREMENT;
+  if (partialHeight) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/0, /*sy=*/42,
+                  PLAYLIST_LEFT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X, dy,
+                  PLAYLIST_LEFT_BORDER_WIDTH, PLAYLIST_HEIGHT_INCREMENT)
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/31, /*sy=*/42,
+                  /*dw=*/5, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X + controls.playlistWidth - 20, dy,
+                  /*dw=*/5, PLAYLIST_HEIGHT_INCREMENT);
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/44, /*sy=*/42,
+                  /*dw=*/7, PLAYLIST_HEIGHT_INCREMENT,
+                  PLAYLIST_X + controls.playlistWidth - 7, dy,
+                  /*dw=*/7, PLAYLIST_HEIGHT_INCREMENT);
+    dy += partialHeight;
+  }
+  const PLAYLIST_BOTTOM_HEIGHT = 38;
+  const PLAYLIST_BOTTOM_LEFT_WIDTH = 125;
+  const PLAYLIST_DISPLAY_WIDTH = 75;
+  const PLAYLIST_BOTTOM_RIGHT_WIDTH = 150;
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/0, /*sy=*/72,
+                PLAYLIST_BOTTOM_LEFT_WIDTH, PLAYLIST_BOTTOM_HEIGHT,
+                /*dx=*/0, dy,
+                PLAYLIST_BOTTOM_LEFT_WIDTH, PLAYLIST_BOTTOM_HEIGHT);
+  let x = Math.floor((controls.playlistWidth - PLAYLIST_BOTTOM_LEFT_WIDTH - PLAYLIST_BOTTOM_RIGHT_WIDTH) / PLAYLIST_WIDTH_INCREMENT);
+  dx = PLAYLIST_BOTTOM_LEFT_WIDTH;
+  let showDisplay = false;
+  if (x >= 3) {
+    x -= 3;
+    showDisplay = true;
+  }
+  while (x-- > 0) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/179, /*sy=*/0,
+                  PLAYLIST_BOTTOM_RIGHT_WIDTH, PLAYLIST_BOTTOM_HEIGHT,
+                  dx, dy,
+                  PLAYLIST_BOTTOM_RIGHT_WIDTH, PLAYLIST_BOTTOM_HEIGHT);
+    dx += PLAYLIST_WIDTH_INCREMENT;
+  }
+  const partialBottomBarWidth = (controls.playlistWidth - PLAYLIST_BOTTOM_LEFT_WIDTH - PLAYLIST_BOTTOM_RIGHT_WIDTH) % PLAYLIST_WIDTH_INCREMENT;
+  if (partialBottomBarWidth) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/179, /*sy=*/0,
+                  PLAYLIST_WIDTH_INCREMENT, PLAYLIST_HEIGHT_INCREMENT,
+                  dx, dy,
+                  partialBottomBarWidth, PLAYLIST_HEIGHT_INCREMENT);
+    dx += partialBottomBarWidth;
+  }
+  if (showDisplay) {
+    ctx.drawImage(plEditBmpImg,
+                  /*sx=*/205, /*sy=*/0,
+                  PLAYLIST_DISPLAY_WIDTH, PLAYLIST_BOTTOM_HEIGHT,
+                  dx, dy,
+                  PLAYLIST_DISPLAY_WIDTH, PLAYLIST_BOTTOM_HEIGHT);
+    dx += 75;
+  }
+  ctx.drawImage(plEditBmpImg,
+                /*sx=*/126, /*sy=*/72,
+                PLAYLIST_BOTTOM_RIGHT_WIDTH, PLAYLIST_BOTTOM_HEIGHT,
+                dx, dy,
+                PLAYLIST_BOTTOM_RIGHT_WIDTH, PLAYLIST_BOTTOM_HEIGHT);
+
+  let numSongs = Math.floor((controls.playlistHeight - 60)/controls.fontHeight);
+  let t = controls.playlistSongs.length - numSongs;
+  let trackH = controls.playlistHeight - 58;
+  const SLIDER_W = 8;
+  const SLIDER_KNOB_H = 18;
+  const SLIDER_SEGMENT_H = 29;
+  const sliderX = controls.playlistWidth - 15;
+  let yp, oy;
+  if (t < 1) {
+    yp = 0;
+  } else {
+    if (controls.playlistSlider > t) {
+      controls.playlistSlider = t;
+    }
+    yp = Math.floor(((trackH - SLIDER_KNOB_H) * controls.playlistSlider) / t);
+    if (yp < 0) yp = 0;
+  }
+  for (y = 0; y < yp - SLIDER_SEGMENT_H - 1; y += SLIDER_SEGMENT_H) {
+    ctx.drawImage(plEditBmpImg,
+                  36, 42,
+                  SLIDER_W, SLIDER_SEGMENT_H,
+                  sliderX, 20 + y,
+                  SLIDER_W, SLIDER_SEGMENT_H);
+  }
+  oy = y + SLIDER_SEGMENT_H;
+  if (SLIDER_KNOB_H + yp > oy) oy += SLIDER_SEGMENT_H;
+  if (y < yp) {
+    ctx.drawImage(plEditBmpImg,
+                  36, 42,
+                  SLIDER_W, yp - y,
+                  sliderX, 20 + yp,
+                  SLIDER_W, yp - y);
+  }
+  ctx.drawImage(plEditBmpImg,
+                controls.playlistSliderPressed ? 61 : 52, 53,
+                SLIDER_W, SLIDER_KNOB_H,
+                sliderX, 20 + yp,
+                SLIDER_W, SLIDER_KNOB_H);
+  y = yp + SLIDER_KNOB_H;
+  if (y < oy && y < trackH) {
+    ctx.drawImage(plEditBmpImg,
+                  36, 42 + SLIDER_SEGMENT_H - (oy - y),
+                  SLIDER_W, ((y < trackH - SLIDER_SEGMENT_H) ? oy - y : trackH - y),
+                  sliderX, 20 + y,
+                  SLIDER_W, ((y < trackH - SLIDER_SEGMENT_H) ? oy - y : trackH - y));
+  }
+
+  y = oy;
+  for (y - oy; y < trackH; y += SLIDER_SEGMENT_H) {
+    ctx.drawImage(plEditBmpImg,
+                  36, 42,
+                  SLIDER_W, (y < trackH - SLIDER_SEGMENT_H) ? SLIDER_SEGMENT_H : trackH - y,
+                  sliderX, 20 + y,
+                  SLIDER_W, (y < trackH - SLIDER_SEGMENT_H) ? SLIDER_SEGMENT_H : trackH - y);
+  }
+
+  ctx.fillStyle = 'black';
+  ctx.fillRect(12, 21, controls.playlistWidth - 31, controls.playlistHeight - 59);
+
+  if (controls.playlistWhichCap === 'file') {
+    drawListOptsButtons();
+  }
+  if (controls.playlistWhichCap === 'add') {
+    drawAddButtons();
+  }
+  if (controls.playlistWhichCap === 'rem') {
+    drawRemButtons();
+  }
+  if (controls.playlistWhichCap === 'sel') {
+    drawSelButtons();
+  }
+  if (controls.playlistWhichCap === 'misc') {
+    drawMiscButtons();
+  }
+}
+
+window.document.addEventListener('mousemove', onMouseMove);
+window.document.addEventListener('mousedown', onMouseDown);
+window.document.addEventListener('mouseup', onMouseUp);
+
+const DEFAULT_SKIN_FILE = 'base-2.91.wsz';
+fetch(DEFAULT_SKIN_FILE).then(async (response) => {
+  if (!response.ok) {
+    console.log('error loading default skin');
+    return;
+  }
+  const buffer = await response.arrayBuffer();
+  await loadSkinResources(buffer);
+});
+
+document.getElementById('skinFile').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const arrayBuffer = await file.arrayBuffer();
+  await loadSkinResources(arrayBuffer);
+});
+    </script>
+</body>
+</html>
